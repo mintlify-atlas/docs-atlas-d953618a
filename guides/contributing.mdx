@@ -1,0 +1,137 @@
+---
+title: Contributing
+description: Build and test CocoIndex locally, report bugs, submit pull requests, and connect with the community.
+---
+
+CocoIndex welcomes contributions of all kinds — code improvements, documentation updates, bug reports, and feature requests. This page covers everything you need to get started.
+
+<CardGroup cols={2}>
+  <Card title="GitHub repository" icon="github" href="https://github.com/cocoindex-io/cocoindex">
+    Browse the source code, open issues, and submit pull requests.
+  </Card>
+  <Card title="Discord community" icon="discord" href="https://discord.com/invite/zpA9S2DR7s">
+    Chat with the community and get real-time support from maintainers.
+  </Card>
+</CardGroup>
+
+## Development setup
+
+CocoIndex has a Rust core and a Python package. You need both to work on most features.
+
+<Steps>
+  <Step title="Clone the repository">
+    ```sh
+    git clone https://github.com/cocoindex-io/cocoindex.git
+    cd cocoindex
+    ```
+  </Step>
+  <Step title="Install uv">
+    CocoIndex uses [uv](https://docs.astral.sh/uv/) for Python project management. Install it if you don't have it:
+
+    ```sh
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+  </Step>
+  <Step title="Build the Rust extension and install the Python package">
+    Run this command after any Rust changes:
+
+    ```sh
+    uv run maturin develop
+    ```
+  </Step>
+  <Step title="Verify the build">
+    Run Rust tests to confirm the build is healthy:
+
+    ```sh
+    cargo test
+    ```
+  </Step>
+</Steps>
+
+## Build and test commands
+
+| Change type | Commands to run |
+|---|---|
+| Rust code only | `uv run maturin develop && cargo test` |
+| Python code only | `uv run dmypy run && uv run pytest python/` |
+| Both Rust and Python | Run all commands from both rows above |
+
+### Running all tests
+
+```sh
+# Rust tests
+cargo test
+
+# Python type checking
+uv run dmypy run
+
+# Python tests
+uv run pytest python/
+```
+
+<Warning>
+Always run `uv run maturin develop` after making Rust changes before running Python tests. The Python package links against the compiled Rust extension — stale builds will cause confusing failures.
+</Warning>
+
+## Codebase structure
+
+```
+cocoindex/
+├── rust/                       # Rust crates (workspace)
+│   ├── cocoindex/              # Main crate — core indexing engine
+│   │   └── src/
+│   │       ├── base/           # Core types: schema, value, spec, json_schema
+│   │       ├── builder/        # Flow/pipeline builder logic
+│   │       ├── execution/      # Runtime execution: evaluator, indexer, live_updater
+│   │       ├── llm/            # LLM integration
+│   │       ├── ops/            # Operations: sources, targets, functions
+│   │       ├── py/             # Python bindings (PyO3)
+│   │       ├── service/        # Service layer
+│   │       └── setup/          # Setup and configuration
+│   ├── py_utils/               # Python-Rust utility helpers
+│   └── utils/                  # General utilities: error handling, batching, etc.
+│
+├── python/
+│   └── cocoindex/              # Python package
+│       ├── __init__.py         # Package entry point
+│       ├── cli.py              # CLI commands
+│       ├── flow.py             # Flow definition API
+│       ├── op.py               # Operation definitions
+│       ├── functions/          # Built-in functions
+│       ├── sources/            # Data source connectors
+│       ├── targets/            # Output target connectors
+│       └── tests/              # Python tests
+│
+├── examples/                   # Example applications
+└── docs/                       # Documentation
+```
+
+## Reporting bugs
+
+Open an issue on [GitHub](https://github.com/cocoindex-io/cocoindex/issues). Include:
+
+- A minimal reproducible example.
+- The CocoIndex version (`pip show cocoindex`).
+- Your Python and Rust versions.
+- The full error traceback.
+
+## Submitting pull requests
+
+1. Fork the repository and create a branch from `main`.
+2. Make your changes, following the code structure above.
+3. Run the relevant test commands for your change type (see the table above).
+4. Open a pull request against `main` with a clear description of what changed and why.
+
+<Tip>
+For significant changes, open an issue first to discuss the approach before writing code.
+</Tip>
+
+## Community channels
+
+| Channel | Purpose |
+|---|---|
+| [GitHub Issues](https://github.com/cocoindex-io/cocoindex/issues) | Bug reports and feature requests |
+| [Discord](https://discord.com/invite/zpA9S2DR7s) | Real-time discussion and support |
+| [Twitter](https://x.com/cocoindex_io) | Updates and announcements |
+| [YouTube](https://www.youtube.com/@cocoindex-io) | Tutorials and demos |
+| [hi@cocoindex.io](mailto:hi@cocoindex.io) | Direct email support |

@@ -1,0 +1,145 @@
+---
+title: "Azure Blob Storage"
+description: "Import files from an Azure Blob Storage container into a CocoIndex indexing flow."
+---
+
+The `AzureBlob` source imports files from an Azure Blob Storage container. It supports prefix filtering, glob patterns, file size limits, and multiple authentication methods including SAS tokens, account access keys, and default Azure credentials.
+
+## Setup
+
+If you are new to Azure Blob Storage, refer to the [Azure Blob Storage quickstart](https://learn.microsoft.com/en-us/azure/storage/blobs/storage-quickstart-blobs-portal).
+
+<Steps>
+  <Step title="Create a storage account">
+    In the [Azure Portal](https://portal.azure.com/), create a storage account.
+  </Step>
+  <Step title="Create a container">
+    Inside the storage account, create a container to hold your files.
+  </Step>
+  <Step title="Upload files">
+    Upload your files to the container via the portal, Azure CLI, or Azure Storage Explorer.
+  </Step>
+  <Step title="Grant access">
+    Grant the identity you will use at minimum the **Storage Blob Data Reader** role on the storage account. See [Authorize access to blob data](https://learn.microsoft.com/en-us/azure/storage/blobs/authorize-data-operations-portal) for details.
+  </Step>
+</Steps>
+
+## Authentication
+
+The `AzureBlob` source supports three authentication methods, applied in this order:
+
+1. **SAS token** — if `sas_token` is provided.
+2. **Account access key** — if `account_access_key` is provided.
+3. **Default Azure credential** — if neither of the above is provided.
+
+### SAS token
+
+Generate a SAS token from the Azure Portal under the container settings. You need at least **List** and **Read** permissions. The token is a query string in the form:
+
+```
+sp=rl&st=2025-07-20T09:33:00Z&se=2025-07-19T09:48:53Z&sv=2024-11-04&sr=c&sig=...
+```
+
+Pass it using `cocoindex.add_transient_auth_entry()`:
+
+```python
+sas_token_ref = cocoindex.add_transient_auth_entry("your-sas-token-string")
+```
+
+### Account access key
+
+Find your account access key in the Azure Portal under the storage account settings. Pass it with `cocoindex.add_transient_auth_entry()`.
+
+### Default Azure credential
+
+When no token or key is provided, the source uses the default Azure credential. This automatically selects the best available method:
+
+- **Local development:** uses your Azure CLI login (`az login`) or environment variables.
+
+  ```sh
+  az login
+  # Optional: set a default subscription
+  az account set --subscription "<YOUR_SUBSCRIPTION_NAME_OR_ID>"
+  ```
+
+- **Azure-hosted environments** (VM, App Service, AKS): uses the resource's Managed Identity.
+- **Automated environments:** uses a Service Principal via environment variables:
+  - `AZURE_CLIENT_ID`
+  - `AZURE_TENANT_ID`
+  - `AZURE_CLIENT_SECRET`
+
+See the [Azure SDK authentication overview](https://learn.microsoft.com/en-us/azure/developer/python/sdk/authentication/overview) for more details.
+
+## Spec
+
+**Class:** `cocoindex.sources.AzureBlob`
+
+<ParamField path="account_name" type="string" required>
+  The name of the Azure storage account.
+</ParamField>
+
+<ParamField path="container_name" type="string" required>
+  The name of the container to import files from.
+</ParamField>
+
+<ParamField path="prefix" type="string">
+  When provided, only files with a path starting with this prefix are imported.
+</ParamField>
+
+<ParamField path="binary" type="boolean" default="false">
+  When `True`, files are read as binary (`Bytes`). When `False` (default), files are read as UTF-8 text (`Str`).
+</ParamField>
+
+<ParamField path="included_patterns" type="string[]">
+  A list of Unix-style glob patterns to include files, e.g. `["*.txt", "docs/**/*.md"]`. If not specified, all files are included.
+
+  <Info>
+    Patterns use the globset syntax. See the [globset documentation](https://docs.rs/globset/latest/globset/index.html#syntax) for details.
+  </Info>
+</ParamField>
+
+<ParamField path="excluded_patterns" type="string[]">
+  A list of Unix-style glob patterns to exclude files, e.g. `["*.tmp", "**/*.log"]`. Files matching these patterns are excluded even if they also match `included_patterns`. If not specified, no files are excluded.
+</ParamField>
+
+<ParamField path="max_file_size" type="integer">
+  Maximum file size in bytes. Files exceeding this limit are treated as non-existent and skipped. If not specified, no size limit is applied.
+</ParamField>
+
+<ParamField path="sas_token" type="TransientAuthEntryReference[string]">
+  A SAS token for authentication, wrapped in a `TransientAuthEntryReference`. When provided, this takes priority over `account_access_key` and default credentials.
+</ParamField>
+
+<ParamField path="account_access_key" type="TransientAuthEntryReference[string]">
+  A storage account access key for authentication, wrapped in a `TransientAuthEntryReference`. Used when `sas_token` is not provided.
+</ParamField>
+
+## Output schema
+
+The source produces a [KTable](/core/data-types) with the following fields:
+
+| Field | Type | Role | Description |
+|---|---|---|---|
+| `filename` | `Str` | Key | File path relative to the container root (or prefix), e.g. `"dir1/file1.md"` |
+| `content` | `Str` or `Bytes` | Value | File content. `Str` when `binary` is `False`, `Bytes` when `True` |
+
+## Example
+
+```python
+import cocoindex
+
+sas_token_ref = cocoindex.add_transient_auth_entry(
+    "sp=rl&st=2025-07-20T09:33:00Z&se=2025-12-31T00:00:00Z&sv=2024-11-04&sr=c&sig=..."
+)
+
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.AzureBlob(
+        account_name="mystorageaccount",
+        container_name="my-documents",
+        prefix="reports/",
+        included_patterns=["**/*.md", "**/*.pdf"],
+        excluded_patterns=["**/*.log"],
+        sas_token=sas_token_ref,
+    )
+)
+```

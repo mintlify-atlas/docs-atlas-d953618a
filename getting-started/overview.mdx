@@ -1,0 +1,64 @@
+---
+title: Overview
+description: CocoIndex is an ultra-performant real-time data transformation framework for AI, with incremental processing.
+---
+
+CocoIndex takes data freshness to the next level. Its core value is **incremental processing** — only recomputing what has changed rather than reprocessing everything from scratch on every update.
+
+The core engine is written in Rust with Python bindings via PyO3, giving you production-ready performance from day one.
+
+## Programming model
+
+CocoIndex follows the [Dataflow programming](https://en.wikipedia.org/wiki/Dataflow_programming) model. Each transformation creates a new field solely based on input fields, without hidden states or value mutation. All data before and after each transformation is observable, with lineage available out of the box.
+
+Developers declare transformations rather than explicitly managing creates, updates, and deletes. CocoIndex handles keeping the derived index in sync with the source.
+
+```python
+# import
+data['content'] = flow_builder.add_source(...)
+
+# transform
+data['out'] = data['content']
+    .transform(...)
+    .transform(...)
+
+# collect data
+collector.collect(...)
+
+# export to db, vector db, graph db ...
+collector.export(...)
+```
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Incremental processing" icon="arrows-rotate">
+    Only recomputes what changed. Minimal work on every source update — no full reindexing required.
+  </Card>
+  <Card title="Rust-powered performance" icon="bolt">
+    Core engine written in Rust. Production-ready from day one with Python bindings via PyO3.
+  </Card>
+  <Card title="Dataflow programming model" icon="diagram-project">
+    Declare transformations, not mutations. Data lineage is observable out of the box.
+  </Card>
+  <Card title="Plug-and-play integrations" icon="plug">
+    Standardized interfaces for sources, targets, and functions. Switch between components in one line of code.
+  </Card>
+</CardGroup>
+
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Build your first text embedding index in under 10 minutes
+  </Card>
+  <Card title="Core concepts" icon="book" href="/core/basics">
+    Understand flows, data scopes, collectors, and incremental processing
+  </Card>
+  <Card title="Sources" icon="database" href="/sources/overview">
+    Connect to local files, S3, Google Drive, Postgres, and more
+  </Card>
+  <Card title="Targets" icon="arrow-right-to-bracket" href="/targets/overview">
+    Export to Postgres, Qdrant, LanceDB, Neo4j, ChromaDB, and more
+  </Card>
+</CardGroup>

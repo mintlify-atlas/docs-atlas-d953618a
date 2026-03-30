@@ -1,0 +1,109 @@
+---
+title: "Qdrant"
+description: "Export data to a Qdrant collection with dense and multivector support."
+---
+
+The `cocoindex.targets.Qdrant` target exports data to a [Qdrant](https://qdrant.tech/) collection. Each export target maps to a unique collection.
+
+| CocoIndex element | Qdrant element |
+|---|---|
+| An export target | A unique collection |
+| A collected row | A point |
+| A vector field (fixed dimension) | A named vector |
+| Other fields | Payload fields |
+
+<Info>
+  Install the Qdrant client before using this target:
+
+  ```sh
+  pip install qdrant-client
+  ```
+</Info>
+
+### Vector type mapping
+
+CocoIndex maps the following vector types to Qdrant vectors:
+
+- **One-dimensional vectors with fixed dimension** — `Vector[Float32, N]`, `Vector[Float64, N]`, `Vector[Int64, N]` — map to [dense vectors](https://qdrant.tech/documentation/concepts/vectors/#dense-vectors).
+- **Two-dimensional vectors whose inner layer has fixed dimension** — `Vector[Vector[Float32, N]]`, `Vector[Vector[Int64, N]]`, `Vector[Vector[Float64, N]]` — map to [multivectors](https://qdrant.tech/documentation/concepts/vectors/#multivectors). The outer dimension may be variable.
+
+<Warning>
+  Qdrant requires vectors to have a fixed dimension. Vector types without a fixed dimension are stored as JSON arrays in the point payload instead of being indexed as Qdrant vectors.
+</Warning>
+
+## Spec
+
+`cocoindex.targets.Qdrant`
+
+<ParamField path="collection_name" type="string" required>
+  Name of the Qdrant collection to export data to.
+</ParamField>
+
+<ParamField path="connection" type="AuthEntryReference[QdrantConnection]">
+  Auth reference to the Qdrant connection. `QdrantConnection` has the following fields:
+
+  - `grpc_url` (`str`): The [gRPC URL](https://qdrant.tech/documentation/interfaces/#grpc-interface) of the Qdrant instance, e.g. `http://localhost:6334/`.
+  - `api_key` (`str`, optional): API key to authenticate requests.
+
+  If not provided, CocoIndex connects to a local Qdrant instance at `http://localhost:6334/` by default.
+</ParamField>
+
+## Example
+
+```python
+import cocoindex
+
+@cocoindex.flow_def(name="TextEmbeddingQdrant")
+def text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    # ... source and transformations ...
+
+    doc_embeddings = data_scope.add_collector()
+    # ... collect fields: id, filename, text, embedding ...
+
+    doc_embeddings.export(
+        "doc_embeddings",
+        cocoindex.targets.Qdrant(
+            collection_name="text_embedding",
+        ),
+        primary_key_fields=["id"],
+        vector_indexes=[
+            cocoindex.VectorIndexDef(
+                field_name="embedding",
+                metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+            )
+        ],
+    )
+```
+
+To connect to a remote Qdrant instance with authentication:
+
+```python
+import cocoindex
+
+qdrant_conn = cocoindex.add_auth_entry(
+    "qdrant",
+    cocoindex.targets.QdrantConnection(
+        grpc_url="https://your-cluster.qdrant.io:6334/",
+        api_key="your-api-key",
+    ),
+)
+
+doc_embeddings.export(
+    "doc_embeddings",
+    cocoindex.targets.Qdrant(
+        collection_name="text_embedding",
+        connection=qdrant_conn,
+    ),
+    primary_key_fields=["id"],
+    vector_indexes=[
+        cocoindex.VectorIndexDef(
+            field_name="embedding",
+            metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+        )
+    ],
+)
+```
+
+<Tip>
+  See the [Text Embedding Qdrant Example](https://github.com/cocoindex-io/cocoindex/tree/main/examples/text_embedding_qdrant) for a complete end-to-end flow.
+</Tip>

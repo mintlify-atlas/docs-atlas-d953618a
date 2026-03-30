@@ -1,0 +1,69 @@
+---
+title: "LocalFile"
+description: "Import files from the local file system into a CocoIndex indexing flow."
+---
+
+The `LocalFile` source imports files from a local file system directory. It supports text and binary file reading, glob-based include/exclude filtering, file size limits, and file system watching for live updates.
+
+## Spec
+
+**Class:** `cocoindex.sources.LocalFile`
+
+<ParamField path="path" type="string" required>
+  Full path of the root directory to import files from.
+</ParamField>
+
+<ParamField path="binary" type="boolean" default="false">
+  When `True`, files are read as binary (`Bytes`). When `False` (default), files are read as UTF-8 text (`Str`).
+</ParamField>
+
+<ParamField path="included_patterns" type="string[]">
+  A list of Unix-style glob patterns to include files, e.g. `["*.txt", "docs/**/*.md"]`. If not specified, all files are included.
+
+  <Info>
+    Patterns use the globset syntax. See the [globset documentation](https://docs.rs/globset/latest/globset/index.html#syntax) for details.
+  </Info>
+</ParamField>
+
+<ParamField path="excluded_patterns" type="string[]">
+  A list of Unix-style glob patterns to exclude files, e.g. `["tmp", "**/node_modules"]`. Files and directories matching these patterns are excluded even if they also match `included_patterns`. If not specified, no files are excluded.
+</ParamField>
+
+<ParamField path="max_file_size" type="integer">
+  Maximum file size in bytes. Files exceeding this limit are treated as non-existent and skipped. Useful for ignoring large files such as videos or backups. If not specified, no size limit is applied.
+</ParamField>
+
+<ParamField path="watch_changes" type="boolean" default="false">
+  When `True`, the source watches the file system for changes and automatically triggers updates when files are added, modified, or deleted.
+</ParamField>
+
+## Output schema
+
+The source produces a [KTable](/core/data-types) with the following fields:
+
+| Field | Type | Role | Description |
+|---|---|---|---|
+| `filename` | `Str` | Key | File path relative to the root directory, e.g. `"dir1/file1.md"` |
+| `content` | `Str` or `Bytes` | Value | File content. `Str` when `binary` is `False`, `Bytes` when `True` |
+
+## Change capture
+
+When `watch_changes` is set to `True`, the source registers a file system watcher on the `path` directory. Any creation, modification, or deletion of files triggers an incremental update — only the affected files are reprocessed.
+
+You can also set `refresh_interval` on `add_source()` to periodically do a full refresh in addition to or instead of watch-based updates.
+
+## Example
+
+```python
+import cocoindex
+
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.LocalFile(
+        path="/data/documents",
+        included_patterns=["**/*.md", "**/*.txt"],
+        excluded_patterns=["**/node_modules", "tmp"],
+        max_file_size=10 * 1024 * 1024,  # 10 MB
+        watch_changes=True,
+    )
+)
+```

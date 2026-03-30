@@ -1,0 +1,311 @@
+---
+title: "CLI"
+description: "Use the CocoIndex CLI to manage and inspect your flows and indexes from the command line."
+---
+
+CocoIndex CLI is a standalone tool for easily managing and inspecting your flows and indexes.
+
+## Invoke the CLI
+
+Once CocoIndex is installed, invoke the CLI using the `cocoindex` command. Most commands require an `APP_TARGET` argument, which tells the CLI where your flow definitions are located.
+
+## APP_TARGET format
+
+The `APP_TARGET` can be in one of the following formats:
+
+1. **Python module name** containing your flow definitions (e.g. `main`, `my_package.flows`). Use `--app-dir <path>` to specify the base directory to load the module from.
+
+2. **Path to a Python file** defining your flows (e.g. `main.py`, `path/to/my_flows.py`). The file is loaded as a top-level Python module — relative imports will not work since the parent package is not defined (similar to `python main.py`).
+
+3. **Flow-specific specifier** for commands that operate on a specific flow (like `show`, `update`, `evaluate`). Combine the application reference with a flow name using a colon:
+   - `my_package.flows:MyFlow`
+   - `path/to/my_flows.py:MyFlow`
+
+## Environment variables
+
+Environment variables are needed for CocoIndex library settings, as described in [Settings](/core/settings#list-of-environment-variables).
+
+You can set environment variables in an environment file:
+
+- By default, the `cocoindex` CLI searches upward from the current directory for a `.env` file.
+- Use `--env-file <path>` to specify one explicitly:
+
+  ```bash
+  cocoindex --env-file path/to/custom.env <COMMAND> ...
+  ```
+
+Loaded variables do **not** override existing system environment variables. If no file is found, only existing system environment variables are used.
+
+## Global options
+
+<ParamField path="-e, --env-file" type="path">
+  Load environment variables from a specified `.env` file. If not provided, a `.env` file in the current directory is loaded if it exists.
+</ParamField>
+
+<ParamField path="-d, --app-dir" type="path">
+  Load apps from the specified directory. It is treated as part of `PYTHONPATH`. Defaults to the current directory.
+</ParamField>
+
+<ParamField path="-V, --version">
+  Show the CocoIndex version and exit.
+</ParamField>
+
+<ParamField path="--help">
+  Show the main help message and exit.
+</ParamField>
+
+## Subcommands
+
+### `setup`
+
+Check and apply backend setup changes for flows, including the internal storage and export targets.
+
+```bash
+cocoindex setup [OPTIONS] APP_TARGET
+```
+
+<ParamField path="-f, --force">
+  Force setup without confirmation prompts.
+</ParamField>
+
+<ParamField path="--reset">
+  Drop existing setup before running setup (equivalent to running `cocoindex drop` first).
+</ParamField>
+
+**Example:**
+
+```bash
+cocoindex setup main.py
+cocoindex setup --force my_package.flows
+```
+
+---
+
+### `drop`
+
+Drop the backend setup for flows.
+
+```bash
+cocoindex drop [OPTIONS] [APP_TARGET] [FLOW_NAME]...
+```
+
+**Modes of operation:**
+
+1. Drop all flows defined in an app: `cocoindex drop <APP_TARGET>`
+2. Drop specific named flows: `cocoindex drop <APP_TARGET> [FLOW_NAME...]`
+
+<ParamField path="-f, --force">
+  Force drop without confirmation prompts.
+</ParamField>
+
+**Example:**
+
+```bash
+cocoindex drop main.py
+cocoindex drop --force my_package.flows MyFlow
+```
+
+---
+
+### `update`
+
+Update the index to reflect the latest data from data sources.
+
+```bash
+cocoindex update [OPTIONS] APP_FLOW_SPECIFIER
+```
+
+`APP_FLOW_SPECIFIER` can be `path/to/app.py`, a module name, `path/to/app.py:FlowName`, or `module:FlowName`. If `:FlowName` is omitted, all flows are updated.
+
+<ParamField path="-L, --live">
+  Continuously watch for changes from data sources and apply them to the target index. If at least one data source has a change capture mechanism enabled, this runs until aborted (e.g. by Ctrl-C). Otherwise it falls back to a one-time update.
+</ParamField>
+
+<ParamField path="--reexport">
+  Reexport to targets even if there's no change.
+</ParamField>
+
+<ParamField path="--full-reprocess">
+  Reprocess everything and invalidate existing caches.
+</ParamField>
+
+<ParamField path="--reset">
+  Drop existing setup before updating (equivalent to running `cocoindex drop` first). Implies `--setup`.
+</ParamField>
+
+<ParamField path="-f, --force">
+  Force setup without confirmation prompts.
+</ParamField>
+
+<ParamField path="-q, --quiet">
+  Avoid printing anything to standard output, e.g. statistics.
+</ParamField>
+
+**Examples:**
+
+```bash
+# One-time update
+cocoindex update main.py
+
+# One-time update with reexport
+cocoindex update --reexport main.py
+
+# Live update
+cocoindex update -L main.py
+
+# Update a specific flow
+cocoindex update main.py:DemoFlow
+```
+
+---
+
+### `evaluate`
+
+Evaluate the flow and dump flow outputs to files. Instead of updating the index, it dumps what would be indexed to files. Mainly used for evaluation purposes.
+
+```bash
+cocoindex evaluate [OPTIONS] APP_FLOW_SPECIFIER
+```
+
+`APP_FLOW_SPECIFIER` formats:
+- `path/to/your_app.py`
+- `an_installed.module_name`
+- `path/to/your_app.py:SpecificFlowName`
+- `an_installed.module_name:SpecificFlowName`
+
+`:SpecificFlowName` can be omitted only if the application defines a single flow.
+
+<ParamField path="-o, --output-dir" type="text">
+  The directory to dump the output to. If not provided, defaults to `eval_{flow_name}_{timestamp}`.
+</ParamField>
+
+<ParamField path="--cache / --no-cache">
+  Use already-cached intermediate data if available. Default: `--cache`. Even when enabled, CocoIndex only reads existing cached data without updating the cache.
+</ParamField>
+
+**Example:**
+
+```bash
+cocoindex evaluate main.py --output-dir ./eval_output
+cocoindex evaluate main.py:DemoFlow --no-cache
+```
+
+---
+
+### `show`
+
+Show the flow spec and schema.
+
+```bash
+cocoindex show [OPTIONS] APP_FLOW_SPECIFIER
+```
+
+`APP_FLOW_SPECIFIER` formats:
+- `path/to/your_app.py`
+- `an_installed.module_name`
+- `path/to/your_app.py:SpecificFlowName`
+- `an_installed.module_name:SpecificFlowName`
+
+`:SpecificFlowName` can be omitted only if the application defines a single flow.
+
+<ParamField path="--color / --no-color">
+  Enable or disable colored output.
+</ParamField>
+
+<ParamField path="-v, --verbose">
+  Show verbose output with full details.
+</ParamField>
+
+**Example:**
+
+```bash
+cocoindex show main.py
+cocoindex show --verbose my_package.flows:DemoFlow
+```
+
+---
+
+### `ls`
+
+List all flows.
+
+```bash
+cocoindex ls [OPTIONS] [APP_TARGET]
+```
+
+**Modes of operation:**
+
+- If `APP_TARGET` is provided, lists flows defined in the app and their backend setup status.
+- If `APP_TARGET` is omitted, lists all flows that have a persisted setup in the backend.
+
+**Example:**
+
+```bash
+# List flows in an app
+cocoindex ls main.py
+
+# List all persisted flows
+cocoindex ls
+```
+
+---
+
+### `server`
+
+Start an HTTP server providing REST APIs. This allows tools like CocoInsight to access the server.
+
+```bash
+cocoindex server [OPTIONS] APP_TARGET
+```
+
+<ParamField path="-a, --address" type="text">
+  The address to bind the server to, in `IP:PORT` format. If unspecified, uses the address from `COCOINDEX_SERVER_ADDRESS`.
+</ParamField>
+
+<ParamField path="-c, --cors-origin" type="text">
+  The origins of clients (e.g. CocoInsight UI) to allow CORS from. Multiple origins as a comma-separated list, e.g. `https://cocoindex.io,http://localhost:3000`. Origins from `COCOINDEX_SERVER_CORS_ORIGINS` are also included.
+</ParamField>
+
+<ParamField path="-ci, --cors-cocoindex">
+  Allow `https://cocoindex.io` to access the server.
+</ParamField>
+
+<ParamField path="-cl, --cors-local" type="integer">
+  Allow `http://localhost:<port>` to access the server.
+</ParamField>
+
+<ParamField path="-L, --live-update">
+  Continuously watch for changes from data sources and apply them to the target index.
+</ParamField>
+
+<ParamField path="--reset">
+  Drop existing setup before starting the server (equivalent to running `cocoindex drop` first). Implies `--setup`.
+</ParamField>
+
+<ParamField path="--reexport">
+  Reexport to targets even if there's no change.
+</ParamField>
+
+<ParamField path="--full-reprocess">
+  Reprocess everything and invalidate existing caches.
+</ParamField>
+
+<ParamField path="-f, --force">
+  Force setup without confirmation prompts.
+</ParamField>
+
+<ParamField path="-q, --quiet">
+  Avoid printing anything to standard output, e.g. statistics.
+</ParamField>
+
+<ParamField path="-r, --reload">
+  Enable auto-reload on code changes.
+</ParamField>
+
+**Example:**
+
+```bash
+cocoindex server main.py
+cocoindex server -a 0.0.0.0:8080 -ci main.py
+cocoindex server -L --cors-cocoindex main.py
+```

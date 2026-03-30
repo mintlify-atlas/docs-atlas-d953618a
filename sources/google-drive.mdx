@@ -1,0 +1,119 @@
+---
+title: "Google Drive"
+description: "Import files from Google Drive folders into a CocoIndex indexing flow."
+---
+
+The `GoogleDrive` source imports files from Google Drive. It authenticates using a Google Cloud service account and supports polling for recently modified files as a change capture mechanism.
+
+## Setup
+
+<Steps>
+  <Step title="Register or log in to Google Cloud">
+    Go to [Google Cloud](https://console.cloud.google.com/) and sign in.
+  </Step>
+  <Step title="Create a service account">
+    In the [Google Cloud Console](https://console.cloud.google.com/), search for **Service Accounts** to open the **IAM & Admin / Service Accounts** page.
+
+    - Click **+ Create Service Account** and follow the instructions.
+    - Under **Actions** for the new service account, click **Manage keys** → **Add key** → **Create new key** → **JSON**.
+    - Download the key file to a safe location.
+  </Step>
+  <Step title="Enable the Google Drive API">
+    In the Google Cloud Console, search for **Google Drive API** and enable it.
+  </Step>
+  <Step title="Share folders with the service account">
+    In Google Drive, share each folder that contains files you want to import with the service account's email address. **Viewer** permission is sufficient.
+
+    - The service account email is in the format `{service-account-id}@{gcp-project-id}.iam.gserviceaccount.com`. Find it on the **IAM & Admin / Service Accounts** page.
+    - Copy the folder ID from the folder's URL: `https://drive.google.com/drive/folders/{folder-id}`.
+  </Step>
+</Steps>
+
+## Spec
+
+**Class:** `cocoindex.sources.GoogleDrive`
+
+<ParamField path="service_account_credential_path" type="string" required>
+  Full path to the service account credential file in JSON format.
+</ParamField>
+
+<ParamField path="root_folder_ids" type="string[]" required>
+  A list of Google Drive folder IDs to import files from.
+</ParamField>
+
+<ParamField path="binary" type="boolean" default="false">
+  When `True`, files are read as binary (`Bytes`). When `False` (default), files are read as UTF-8 text (`Str`).
+</ParamField>
+
+<ParamField path="recent_changes_poll_interval" type="datetime.timedelta">
+  When set, the source polls Google Drive for recently modified files at this interval. This provides a low-latency change capture mechanism without a full refresh.
+
+  <Info>
+    Polling for recent changes retrieves only metadata for files modified since the last poll, making it cheaper than a full refresh when the folder contains many files.
+
+    However, polling only detects changes for files that still exist. Deleted files or files the service account can no longer access are not detected by this mechanism.
+
+    It is recommended to also set `refresh_interval` on `add_source()` with a larger value (e.g. 5 minutes) to cover deletions and access changes. Set `recent_changes_poll_interval` to a smaller value (e.g. 10 seconds) for low-latency detection of modifications.
+  </Info>
+</ParamField>
+
+<ParamField path="included_patterns" type="string[]">
+  A list of Unix-style glob patterns to include files, e.g. `["*.txt", "docs/**/*.md"]`. If not specified, all files are included.
+</ParamField>
+
+<ParamField path="excluded_patterns" type="string[]">
+  A list of Unix-style glob patterns to exclude files, e.g. `["tmp", "**/node_modules"]`. Files matching these patterns are excluded even if they also match `included_patterns`. If not specified, no files are excluded.
+</ParamField>
+
+<ParamField path="max_file_size" type="integer">
+  Maximum file size in bytes. Files exceeding this limit are ignored. If not specified, no size limit is applied.
+</ParamField>
+
+## Output schema
+
+The source produces a [KTable](/core/data-types) with the following fields:
+
+| Field | Type | Role | Description |
+|---|---|---|---|
+| `file_id` | `Str` | Key | The file's unique ID in Google Drive |
+| `filename` | `Str` | Value | File name without path, e.g. `"file1.md"` |
+| `mime_type` | `Str` | Value | MIME type of the file |
+| `content` | `Str` or `Bytes` | Value | File content. `Str` when `binary` is `False`, `Bytes` when `True` |
+
+## Change capture
+
+Set `recent_changes_poll_interval` to enable incremental updates. The source periodically queries Google Drive for files modified within the polling window and reprocesses only those files.
+
+Because this mechanism only detects files that still exist, pair it with a `refresh_interval` on `add_source()` to also catch deletions:
+
+```python
+import datetime
+import cocoindex
+
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.GoogleDrive(
+        service_account_credential_path="/secrets/service-account.json",
+        root_folder_ids=["1A2B3C4D5E6F7G8H9I"],
+        recent_changes_poll_interval=datetime.timedelta(seconds=10),
+    ),
+    refresh_interval=datetime.timedelta(minutes=5),
+)
+```
+
+## Example
+
+```python
+import datetime
+import cocoindex
+
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.GoogleDrive(
+        service_account_credential_path="/secrets/service-account.json",
+        root_folder_ids=["1A2B3C4D5E6F7G8H9I", "9I8H7G6F5E4D3C2B1A"],
+        included_patterns=["**/*.md", "**/*.pdf"],
+        max_file_size=50 * 1024 * 1024,  # 50 MB
+        recent_changes_poll_interval=datetime.timedelta(seconds=30),
+    ),
+    refresh_interval=datetime.timedelta(minutes=10),
+)
+```

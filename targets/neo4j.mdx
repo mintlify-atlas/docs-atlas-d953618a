@@ -1,0 +1,209 @@
+---
+title: "Neo4j"
+description: "Export data to a Neo4j property graph database for knowledge graph use cases."
+---
+
+The `cocoindex.targets.Neo4j` target exports data to a [Neo4j](https://neo4j.com/) graph database. CocoIndex maps data collector rows to either **nodes** or **relationships** in the property graph.
+
+<Tip>
+  Read the [Targets overview](/targets/overview#property-graph-targets) for an introduction to the property graph model and how CocoIndex maps data to graph elements.
+</Tip>
+
+## Property graph concepts
+
+A property graph consists of:
+
+- **Nodes** — entities with a label (type) and properties.
+- **Relationships** — directed connections between nodes with a type and properties.
+- **Properties** — key-value pairs on nodes or relationships.
+
+CocoIndex data maps to the graph as follows:
+
+| CocoIndex element | Graph element |
+|---|---|
+| An export target | Nodes with a unique label, or relationships with a unique type |
+| A collected row | A node or a relationship |
+| A field | A property |
+
+### Nodes matching and deduplication
+
+The same node may appear multiple times — from exported nodes and from the source/target of relationships. CocoIndex automatically matches and deduplicates nodes based on their primary key values. For non-primary-key fields, CocoIndex picks values from an arbitrary occurrence, so keep value fields consistent across appearances of the same node.
+
+## Spec
+
+`cocoindex.targets.Neo4j`
+
+<ParamField path="connection" type="AuthEntryReference[Neo4jConnection]" required>
+  Auth reference to the Neo4j database. `Neo4jConnection` has the following fields:
+
+  - `uri` (`str`): Connection URI, e.g. `bolt://localhost:7687`.
+  - `user` (`str`): Username.
+  - `password` (`str`): Password.
+  - `db` (`str`, optional): Database name, e.g. `neo4j`.
+</ParamField>
+
+<ParamField path="mapping" type="Nodes | Relationships" required>
+  How to map each collected row to the graph. Use `cocoindex.targets.Nodes` for node export or `cocoindex.targets.Relationships` for relationship export.
+</ParamField>
+
+### Nodes mapping
+
+`cocoindex.targets.Nodes`
+
+<ParamField path="label" type="string" required>
+  The node label. Each `Neo4j` target using `Nodes` mapping must use a unique label.
+</ParamField>
+
+### Relationships mapping
+
+`cocoindex.targets.Relationships`
+
+<ParamField path="rel_type" type="string" required>
+  The relationship type. Each `Neo4j` target using `Relationships` mapping must use a unique type.
+</ParamField>
+
+<ParamField path="source" type="NodeFromFields" required>
+  Specifies how to extract the source node from the collected row. `NodeFromFields` has:
+
+  - `label` (`str`): Label of the source node.
+  - `fields` (`list[TargetFieldMapping]`): Field mappings from the row to node properties. Each `TargetFieldMapping` has:
+    - `source` (`str`): Field name in the collected row.
+    - `target` (`str`, optional): Property name on the node. Defaults to the same as `source`.
+</ParamField>
+
+<ParamField path="target" type="NodeFromFields" required>
+  Specifies how to extract the target node from the collected row. Same structure as `source`.
+</ParamField>
+
+<Note>
+  For each node in a relationship, you must map all primary key fields. Optionally, you can map non-key fields — if you do, map all of them. Any fields not mapped to source or target nodes become properties of the relationship.
+</Note>
+
+## Declarations
+
+If a node label appears only as the source or target of relationships (and is never exported as a node directly), you must declare it using `flow_builder.declare()`. This lets CocoIndex configure indexing for those nodes.
+
+`cocoindex.targets.Neo4jDeclaration`
+
+<ParamField path="connection" type="AuthEntryReference[Neo4jConnection]" required>
+  Auth reference to the same Neo4j connection.
+</ParamField>
+
+<ParamField path="nodes_label" type="string" required>
+  The label of the node to declare.
+</ParamField>
+
+<ParamField path="primary_key_fields" type="list[str]" required>
+  Primary key fields for this node label.
+</ParamField>
+
+<ParamField path="vector_indexes" type="list[VectorIndexDef]">
+  Vector indexes to create on this node label.
+</ParamField>
+
+## Running a local Neo4j instance
+
+If you don't have a Neo4j database, start one with the CocoIndex dev compose config:
+
+```sh
+docker compose -f <(curl -L https://raw.githubusercontent.com/cocoindex-io/cocoindex/refs/heads/main/dev/neo4j.yaml) up -d
+```
+
+This starts Neo4j accessible with username `neo4j` and password `cocoindex`. The Neo4j browser is available at [http://localhost:7474](http://localhost:7474).
+
+## Example
+
+Build a knowledge graph mapping documents to nodes and document-place relationships:
+
+```python
+import cocoindex
+
+neo4j_conn = cocoindex.add_auth_entry(
+    "neo4j",
+    cocoindex.targets.Neo4jConnection(
+        uri="bolt://localhost:7687",
+        user="neo4j",
+        password="cocoindex",
+        db="neo4j",
+    ),
+)
+
+@cocoindex.flow_def(name="KnowledgeGraphFlow")
+def knowledge_graph_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    # Declare the Place label (only referenced by relationships, never exported directly)
+    flow_builder.declare(
+        cocoindex.targets.Neo4jDeclaration(
+            connection=neo4j_conn,
+            nodes_label="Place",
+            primary_key_fields=["name"],
+        )
+    )
+
+    # ... source and transformations ...
+
+    document_collector = data_scope.add_collector()
+    # ... collect fields: filename, summary ...
+
+    # Export documents as nodes
+    document_collector.export(
+        "documents",
+        cocoindex.targets.Neo4j(
+            connection=neo4j_conn,
+            mapping=cocoindex.targets.Nodes(label="Document"),
+        ),
+        primary_key_fields=["filename"],
+    )
+
+    doc_place_collector = data_scope.add_collector()
+    # ... collect fields: doc_filename, place_name, place_embedding, location ...
+
+    # Export document-place relationships
+    doc_place_collector.export(
+        "doc_place_mentions",
+        cocoindex.targets.Neo4j(
+            connection=neo4j_conn,
+            mapping=cocoindex.targets.Relationships(
+                rel_type="MENTION",
+                source=cocoindex.targets.NodeFromFields(
+                    label="Document",
+                    fields=[
+                        cocoindex.targets.TargetFieldMapping(
+                            source="doc_filename", target="filename"
+                        ),
+                    ],
+                ),
+                target=cocoindex.targets.NodeFromFields(
+                    label="Place",
+                    fields=[
+                        cocoindex.targets.TargetFieldMapping(
+                            source="place_name", target="name"
+                        ),
+                        cocoindex.targets.TargetFieldMapping(
+                            source="place_embedding", target="embedding"
+                        ),
+                    ],
+                ),
+            ),
+        ),
+        primary_key_fields=["doc_filename", "place_name"],
+    )
+```
+
+In this example, `doc_filename` maps to `Document.filename` (source node), `place_name` and `place_embedding` map to `Place.name` and `Place.embedding` (target node), and the remaining field `location` becomes a property on the `MENTION` relationship.
+
+## Data cleanup between projects
+
+If you are building multiple CocoIndex flows from different projects to the same Neo4j instance:
+
+- On the **Community Edition**, run a separate container for each flow.
+- On the **Enterprise Edition**, use different databases within one container.
+
+To clean up data for a specific flow, run:
+
+```sh
+cocoindex drop <APP_TARGET>
+```
+
+<Tip>
+  See the [Docs to Knowledge Graph](https://github.com/cocoindex-io/cocoindex/tree/main/examples/docs_to_knowledge_graph) and [Product Recommendation](https://github.com/cocoindex-io/cocoindex/tree/main/examples/product_recommendation) examples for complete end-to-end flows.
+</Tip>

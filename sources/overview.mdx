@@ -1,0 +1,60 @@
+---
+title: "Sources"
+description: "Import data from files, databases, and cloud storage into a CocoIndex indexing flow."
+---
+
+A **source** is the data origin you import from — local files, databases, object stores, or cloud file systems — that feeds into an indexing flow for transformation and retrieval.
+
+## Using a source
+
+Add a source to your flow using `flow_builder.add_source()`. The method accepts a **source spec** — a configuration object that identifies the source type and its parameters.
+
+```python
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.LocalFile(
+        path="/data/documents",
+    )
+)
+```
+
+The return value is a KTable that you can then transform with functions and write to targets.
+
+### Live updates
+
+Pass `refresh_interval` to `add_source()` to poll the source and trigger reprocessing when data changes. Some sources also support push-based change capture for lower latency.
+
+```python
+import datetime
+
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.LocalFile(
+        path="/data/documents",
+        watch_changes=True,
+    ),
+    refresh_interval=datetime.timedelta(minutes=5),
+)
+```
+
+## Available sources
+
+<CardGroup cols={2}>
+  <Card title="LocalFile" icon="folder-open" href="/sources/local-file">
+    Import files from the local file system. Supports text and binary modes, glob filtering, and file system watch for live updates.
+  </Card>
+  <Card title="Postgres" icon="database" href="/sources/postgres">
+    Import rows from a PostgreSQL table. Supports incremental updates via ordinal columns and change capture via LISTEN/NOTIFY.
+  </Card>
+  <Card title="Amazon S3" icon="aws" href="/sources/amazon-s3">
+    Import files from an Amazon S3 bucket. Supports prefix filtering, glob patterns, and SQS-based change event notifications.
+  </Card>
+  <Card title="Google Drive" icon="google-drive" href="/sources/google-drive">
+    Import files from Google Drive folders. Authenticates via service accounts and supports polling for recently modified files.
+  </Card>
+  <Card title="Azure Blob Storage" icon="microsoft" href="/sources/azure-blob">
+    Import files from Azure Blob Storage containers. Supports SAS tokens, account access keys, and default Azure credentials.
+  </Card>
+</CardGroup>
+
+## Custom sources
+
+If none of the built-in sources meet your needs, you can implement your own source. See [Custom sources](/functions/custom-sources) for details.

@@ -1,0 +1,114 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "CocoIndex",
+  "projectDescription": "An ultra-performant data transformation framework for AI with incremental processing, enabling developers to build and maintain vector indexes, knowledge graphs, and custom pipelines from any data source.",
+  "theme": "luma",
+  "primaryColor": "#040404",
+  "lightColor": "#bd6949",
+  "darkColor": "#7ae370",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "getting-started/overview",
+              "getting-started/installation",
+              "getting-started/quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "core/basics",
+              "core/flow-definition",
+              "core/flow-operations",
+              "core/data-types",
+              "core/settings",
+              "core/cli"
+            ]
+          },
+          {
+            "group": "Sources",
+            "pages": [
+              "sources/overview",
+              "sources/local-file",
+              "sources/postgres",
+              "sources/amazon-s3",
+              "sources/google-drive",
+              "sources/azure-blob"
+            ]
+          },
+          {
+            "group": "Targets",
+            "pages": [
+              "targets/overview",
+              "targets/postgres",
+              "targets/qdrant",
+              "targets/lancedb",
+              "targets/neo4j",
+              "targets/chromadb",
+              "targets/pinecone"
+            ]
+          },
+          {
+            "group": "Functions & LLM",
+            "pages": [
+              "functions/built-in-functions",
+              "functions/llm-integration",
+              "functions/custom-functions",
+              "functions/custom-sources",
+              "functions/custom-targets"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/querying",
+              "guides/live-updates",
+              "guides/control-flow",
+              "guides/contributing"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Incremental processing — only recomputes changed data, minimizing work on source updates",
+    "Dataflow programming model with observable data lineage out of the box",
+    "High-performance Rust core engine with Python bindings via PyO3",
+    "Plug-and-play sources (local files, S3, Google Drive, Postgres, Azure Blob) and targets (Postgres, Qdrant, LanceDB, Neo4j, ChromaDB, Pinecone)",
+    "Built-in LLM integrations for text embedding and structured extraction (OpenAI, Anthropic, Gemini, Ollama, and more)",
+    "Live update mode with change-data-capture for continuous index freshness",
+    "Custom operation support — extend with your own sources, functions, and targets",
+    "CLI for managing, inspecting, and updating indexing flows"
+  ],
+  "publicApiSurface": [
+    "cocoindex.flow_def — decorator to declare an indexing flow",
+    "cocoindex.FlowBuilder.add_source() — import data from a source",
+    "cocoindex.DataSlice.transform() — apply a function to a data slice",
+    "cocoindex.DataSlice.row() — iterate over rows of a table-typed data slice",
+    "cocoindex.DataScope.add_collector() — create a data collector",
+    "cocoindex.Collector.collect() — collect fields into the collector",
+    "cocoindex.Collector.export() — export collected data to a target",
+    "cocoindex.transform_flow — decorator for shared indexing/query transformation logic",
+    "cocoindex.Flow.update() / update_async() — one-time update of index",
+    "cocoindex.FlowLiveUpdater — continuous live update of index",
+    "cocoindex.Flow.setup() / drop() — manage persistent backends",
+    "cocoindex.init() — initialize CocoIndex with settings",
+    "cocoindex.Settings / DatabaseConnectionSpec — configuration dataclasses",
+    "cocoindex.functions.SplitRecursively — chunk text into pieces",
+    "cocoindex.functions.SentenceTransformerEmbed — embed text with SentenceTransformers",
+    "cocoindex.functions.EmbedText — embed text via LLM APIs",
+    "cocoindex.functions.ExtractByLlm — extract structured data via LLM",
+    "cocoindex.LlmSpec / LlmApiType — LLM configuration",
+    "cocoindex.VectorIndexDef / VectorSimilarityMetric — vector index configuration",
+    "cocoindex.sources.LocalFile / AmazonS3 / GoogleDrive / AzureBlob / Postgres — built-in sources",
+    "cocoindex.targets.Postgres / Qdrant / LanceDB / Neo4j / ChromaDB / Pinecone — built-in targets",
+    "cocoindex.op.function — decorator to implement a custom function",
+    "cocoindex.op.executor_class — decorator to implement a stateful custom function"
+  ]
+}

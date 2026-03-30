@@ -1,0 +1,308 @@
+---
+title: "Flow Operations"
+description: "Operate a CocoIndex flow: set up and drop backends, run one-time or live updates, and evaluate flows without modifying targets."
+---
+
+After a flow is defined as discussed in [Flow Definition](/core/flow-definition), you can start transforming data with it.
+
+This can be achieved in two ways:
+
+- Use the [CocoIndex CLI](/core/cli).
+- Use the APIs provided by the library. After defining a flow in your code, you have a `cocoindex.Flow` object you can interact with.
+
+The following sections assume you have a flow `demo_flow`:
+
+```python title="main.py"
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+```
+
+This creates a `demo_flow` object of type `cocoindex.Flow`.
+
+## Setup/drop flow
+
+For a flow, its persistent backends need to be ready before it can run, including:
+
+- [Internal storage](/core/basics#internal-storage) for CocoIndex.
+- Backend resources for targets exported by the flow, e.g. a table in a relational database, a collection in a vector database, etc.
+
+CocoIndex supports two types of actions to manage the persistent backends automatically:
+
+- **Setup** — changes the backends owned by the flow to the desired state. For example: creates new tables for new flows, drops an existing table if the corresponding target is gone, or adds new columns to a target table if a new field is collected. It's a no-op if the backend states are already in the desired state.
+
+- **Drop** — drops all backends owned by the flow. It's a no-op if there are no existing backends owned by the flow (e.g. never set up, or already dropped).
+
+### Library API
+
+`Flow` provides the following APIs to set up or drop individual flows:
+
+<Tabs>
+  <Tab title="Synchronous">
+    ```python
+    demo_flow.setup(report_to_stdout=True)
+    demo_flow.drop(report_to_stdout=True)
+    ```
+  </Tab>
+  <Tab title="Async">
+    ```python
+    await demo_flow.setup_async(report_to_stdout=True)
+    await demo_flow.drop_async(report_to_stdout=True)
+    ```
+  </Tab>
+</Tabs>
+
+#### Parameters
+
+<ParamField path="report_to_stdout" type="bool" default="False">
+  Whether to print a report of setup/drop changes to stdout.
+</ParamField>
+
+### All-flows variants
+
+CocoIndex also provides APIs to set up or drop all registered flows at once:
+
+```python
+cocoindex.setup_all_flows(report_to_stdout=True)
+cocoindex.drop_all_flows(report_to_stdout=True)
+```
+
+<Note>
+  After dropping a flow, the in-memory `cocoindex.Flow` instance remains valid and you can call setup methods on it again. Call `demo_flow.close()` if you want to remove the flow from the current process (see [Flow Definition](/core/flow-definition#entry-point)).
+</Note>
+
+## Build/update target data
+
+The major goal of a flow is to perform transformations on source data and build/update data in the target. This action has two modes:
+
+<CardGroup cols={2}>
+  <Card title="One-time update" icon="rotate">
+    Builds/updates the target data based on source data up to the current moment. After the target data is at least as fresh as the source data at the time the update started, it is done. Best for situations where you need fresh target data at specific time points.
+  </Card>
+  <Card title="Live update" icon="signal">
+    Performs a one-time update first, then continuously captures changes from source data and updates the target accordingly. Long-running and only stops when explicitly aborted. Best for situations where you need fresh target data continuously.
+  </Card>
+</CardGroup>
+
+<Info>
+  For both modes, CocoIndex performs **incremental processing** — only performing computations and target mutations on source data that has changed, or where the flow definition has changed. This achieves best efficiency.
+</Info>
+
+### Reexport targets option
+
+When enabled, CocoIndex reprocesses and reexports the targets even if neither the source data nor the flow definition has changed. Useful when you need to reload target data, e.g. after data loss.
+
+<Note>
+  When `reexport_targets` is enabled on live update mode, reexport only happens during the initial one-time update.
+</Note>
+
+## One-time update
+
+### Library API
+
+The `Flow.update()` method creates/updates data in the target.
+
+<Tabs>
+  <Tab title="Synchronous">
+    ```python
+    update_info = demo_flow.update(print_stats=True)
+    ```
+  </Tab>
+  <Tab title="Async">
+    ```python
+    update_info = await demo_flow.update_async(print_stats=True)
+    ```
+  </Tab>
+</Tabs>
+
+Once the function finishes, the target data is fresh up to the moment when the function was called.
+
+#### Parameters
+
+<ParamField path="reexport_targets" type="bool" default="False">
+  Whether to reexport the targets even if there's no change.
+</ParamField>
+
+<ParamField path="full_reprocess" type="bool" default="False">
+  Whether to reprocess everything and invalidate existing caches.
+</ParamField>
+
+<ParamField path="print_stats" type="bool" default="False">
+  Whether to print stats during the update.
+</ParamField>
+
+#### Return value
+
+Returns an object with the following property:
+
+<ResponseField name="stats" type="dict[str, dict[str, int]]">
+  A dictionary of stats keyed by source name. Each value is a dictionary with the following metrics: `num_no_change`, `num_insertions`, `num_updates`, `num_reprocesses`, `num_deletions`, `num_errors`.
+</ResponseField>
+
+<Info>
+  `update()` and `update_async()` can be called simultaneously, even if a previous call has not finished yet. CocoIndex automatically combines multiple calls into a single update while guaranteeing that the target data is fresh up to the moment when the last call was initiated.
+</Info>
+
+## Live update
+
+A data source may enable one or multiple **change capture mechanisms**:
+
+- Configured with a [refresh interval](/core/flow-definition#refresh-interval), which is generally applicable to all data sources.
+- Specific data sources also provide their own change capture mechanisms. For example, the `Postgres` source listens to PostgreSQL change notifications, the `AmazonS3` source watches S3 bucket change events, and the `GoogleDrive` source allows polling recently modified files.
+
+Change capture mechanisms enable CocoIndex to continuously capture changes from source data and update target data accordingly under live update mode.
+
+### Library API
+
+To perform live update, create a `cocoindex.FlowLiveUpdater` object using your `cocoindex.Flow` object:
+
+```python
+my_updater = cocoindex.FlowLiveUpdater(
+    demo_flow, cocoindex.FlowLiveUpdaterOptions(print_stats=True))
+```
+
+#### `FlowLiveUpdaterOptions`
+
+<ParamField path="live_mode" type="bool" default="True">
+  Whether to perform live update for data sources with change capture mechanisms. Has no effect for data sources without any change capture mechanism.
+</ParamField>
+
+<ParamField path="reexport_targets" type="bool" default="False">
+  Whether to reexport the targets even if there's no change.
+</ParamField>
+
+<ParamField path="full_reprocess" type="bool" default="False">
+  Whether to reprocess everything and invalidate existing caches.
+</ParamField>
+
+<ParamField path="print_stats" type="bool" default="False">
+  Whether to print stats during the update.
+</ParamField>
+
+#### `FlowLiveUpdater` methods
+
+<AccordionGroup>
+  <Accordion title="start() / start_async()">
+    Start the updater. CocoIndex will continuously capture changes from source data and update the target data in background threads managed by the engine.
+
+    ```python
+    my_updater.start()
+    # or
+    await my_updater.start_async()
+    ```
+  </Accordion>
+  <Accordion title="abort()">
+    Abort the updater.
+
+    ```python
+    my_updater.abort()
+    ```
+  </Accordion>
+  <Accordion title="wait() / wait_async()">
+    Wait for the updater to finish. Unblocks when:
+    - The updater was aborted.
+    - A one-time update is done and live update is not enabled (either `live_mode` is `False`, or all data sources have no change capture mechanisms).
+
+    ```python
+    my_updater.wait()
+    # or
+    await my_updater.wait_async()
+    ```
+  </Accordion>
+  <Accordion title="next_status_updates() / next_status_updates_async()">
+    Get the next status updates. Blocks until there are new status updates, including when processing finishes for a batch of source updates or the live updater stops (aborted, or no more sources to process).
+
+    Returns a `FlowUpdaterStatusUpdates` object with:
+    - `active_sources` — names of sources still active (not stopped). Empty means the updater has stopped.
+    - `updated_sources` — names of sources with updates since the last call.
+
+    ```python
+    while True:
+        updates = my_updater.next_status_updates()
+
+        for source in updates.updated_sources:
+            run_your_downstream_operations_for(source)
+
+        if not updates.active_sources:
+            break
+    ```
+
+    <Info>
+      `next_status_updates()` automatically combines multiple status updates if more than one arrives between two calls, so you don't need to worry about updates piling up.
+    </Info>
+  </Accordion>
+  <Accordion title="update_stats()">
+    Returns the index update stats for the updater.
+
+    ```python
+    print(my_updater.update_stats())
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Live updater lifecycle
+
+<Steps>
+  <Step title="Create the updater">
+    ```python
+    my_updater = cocoindex.FlowLiveUpdater(demo_flow)
+    ```
+  </Step>
+  <Step title="Start the updater">
+    ```python
+    my_updater.start()
+    ```
+  </Step>
+  <Step title="Perform your logic">
+    Run your query loop or other application logic while the updater runs in the background.
+  </Step>
+  <Step title="Wait for completion">
+    ```python
+    my_updater.wait()
+    print(my_updater.update_stats())
+    ```
+  </Step>
+</Steps>
+
+### Context manager
+
+Python SDK supports using `FlowLiveUpdater` as a context manager. It automatically starts the updater on entry and aborts and waits for completion on exit.
+
+<Tabs>
+  <Tab title="Synchronous">
+    ```python
+    with cocoindex.FlowLiveUpdater(demo_flow) as my_updater:
+        # Perform your own logic (e.g. a query loop).
+        ...
+    ```
+  </Tab>
+  <Tab title="Async">
+    ```python
+    async with cocoindex.FlowLiveUpdater(demo_flow) as my_updater:
+        # Perform your own logic (e.g. a query loop).
+        ...
+    ```
+  </Tab>
+</Tabs>
+
+## Evaluate the flow
+
+CocoIndex allows you to run the transformations defined by a flow without updating the target. This is useful for evaluation and debugging.
+
+### Library API
+
+The `evaluate_and_dump()` method runs the transformation and dumps flow outputs to files.
+
+```python
+demo_flow.evaluate_and_dump(cocoindex.EvaluateAndDumpOptions(output_dir="./eval_output"))
+```
+
+#### `EvaluateAndDumpOptions`
+
+<ParamField path="output_dir" type="str" required>
+  The directory to dump the result to.
+</ParamField>
+
+<ParamField path="use_cache" type="bool" default="True">
+  Use already-cached intermediate data if available. Note that even when enabled, CocoIndex only reads existing cached data without updating the cache.
+</ParamField>

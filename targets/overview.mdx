@@ -1,0 +1,107 @@
+---
+title: "Targets overview"
+description: "Export data from CocoIndex flows to supported storage backends."
+---
+
+A **target** is where CocoIndex exports your processed data. After your flow builder collects rows into a data collector, you call `collector.export()` to write the data to a target.
+
+## How targets work
+
+Each call to `collector.export()` maps data from one collector to one target using a **target spec** — a dataclass describing the connection, table name, and any other target-specific configuration.
+
+```python
+collector.export(
+    "my_export",
+    cocoindex.targets.Postgres(table_name="doc_embeddings"),
+    primary_key_fields=["id"],
+    vector_indexes=[
+        cocoindex.VectorIndexDef(
+            field_name="embedding",
+            metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+        )
+    ],
+)
+```
+
+### Common index configuration
+
+The following parameters are shared across most targets and are passed to `collector.export()`:
+
+- `primary_key_fields` (`list[str]`, required): Fields that uniquely identify each row in the target.
+- `vector_indexes` (`list[VectorIndexDef]`, optional): Vector indexes to create on the target.
+- `fts_indexes` (`list[FtsIndexDef]`, optional): Full-text search indexes to create on the target.
+
+### VectorIndexDef
+
+Defines a vector index on a field.
+
+<ParamField path="field_name" type="string" required>
+  Name of the vector field to index.
+</ParamField>
+
+<ParamField path="metric" type="VectorSimilarityMetric" required>
+  Distance metric to use for similarity search. Options:
+
+  - `VectorSimilarityMetric.COSINE_SIMILARITY` — cosine distance
+  - `VectorSimilarityMetric.L2_DISTANCE` — Euclidean distance
+  - `VectorSimilarityMetric.INNER_PRODUCT` — dot product similarity
+</ParamField>
+
+<ParamField path="method" type="VectorIndexMethod">
+  Index algorithm. Options:
+
+  - `HnswVectorIndexMethod(m, ef_construction)` — HNSW graph index. `m` is the number of bidirectional links per element; `ef_construction` is the size of the dynamic candidate list during build.
+  - `IvfFlatVectorIndexMethod(lists)` — IVF flat index. `lists` is the number of partitions (clusters).
+
+  If not specified, the target chooses its default method.
+</ParamField>
+
+### FtsIndexDef
+
+Defines a full-text search index on a field.
+
+<ParamField path="field_name" type="string" required>
+  Name of the text field to index.
+</ParamField>
+
+<ParamField path="parameters" type="object">
+  Target-specific parameters passed through to the underlying FTS index creation API (e.g., `tokenizer_name` for LanceDB).
+</ParamField>
+
+## Available targets
+
+<CardGroup cols={2}>
+  <Card title="Postgres" icon="database" href="/targets/postgres">
+    Relational database with vector search via the pgvector extension.
+  </Card>
+  <Card title="Qdrant" icon="circle-dot" href="/targets/qdrant">
+    Vector database with keyword search and dense/multivector support.
+  </Card>
+  <Card title="LanceDB" icon="table" href="/targets/lancedb">
+    Embedded vector database with FTS index support.
+  </Card>
+  <Card title="Neo4j" icon="share-nodes" href="/targets/neo4j">
+    Property graph database for knowledge graphs.
+  </Card>
+  <Card title="ChromaDB" icon="layer-group" href="/targets/chromadb">
+    Vector database with built-in text search.
+  </Card>
+  <Card title="Pinecone" icon="cloud" href="/targets/pinecone">
+    Managed vector database with metadata filtering.
+  </Card>
+</CardGroup>
+
+## Property graph targets
+
+Neo4j is a **property graph** target. In a property graph, both nodes and relationships can have properties (key-value pairs). CocoIndex maps data collector rows to either nodes or relationships in the graph.
+
+Data from collectors can be mapped to graph elements in two ways:
+
+- **Rows → Nodes**: Each row becomes a node in the graph.
+- **Rows → Relationships**: Each row becomes a relationship (edge) including its source and target nodes.
+
+See the [Neo4j](/targets/neo4j) page for the full property graph mapping documentation.
+
+## Custom targets
+
+If none of the built-in targets fit your needs, you can implement a custom target. See [Custom targets](/functions/custom-targets) for details.

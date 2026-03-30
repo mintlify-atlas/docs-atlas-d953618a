@@ -1,0 +1,124 @@
+---
+title: "Postgres"
+description: "Import rows from a PostgreSQL table into a CocoIndex indexing flow."
+---
+
+The `Postgres` source imports rows from a PostgreSQL table. It supports incremental processing via ordinal columns and push-based change capture via PostgreSQL LISTEN/NOTIFY.
+
+## Setup
+
+<Steps>
+  <Step title="Ensure the table has a primary key">
+    Tables without a primary key are not supported.
+  </Step>
+  <Step title="Grant read permissions">
+    Grant the connecting user at least `SELECT` permission on the target table.
+  </Step>
+  <Step title="Provide a database connection">
+    You can use CocoIndex's default database connection, or supply an explicit connection via a transient auth entry:
+
+    ```python
+    cocoindex.add_transient_auth_entry(
+        cocoindex.sources.DatabaseConnectionSpec(
+            url="postgres://user:password@host:5432/dbname?sslmode=require",
+        )
+    )
+    ```
+  </Step>
+</Steps>
+
+## Spec
+
+**Class:** `cocoindex.sources.Postgres`
+
+<ParamField path="table_name" type="string" required>
+  The PostgreSQL table to read from.
+</ParamField>
+
+<ParamField path="database" type="TransientAuthEntryReference[DatabaseConnectionSpec]">
+  Database connection reference. If not provided, the default CocoIndex database is used.
+</ParamField>
+
+<ParamField path="included_columns" type="string[]">
+  Non-primary-key columns to include. If not specified, all non-PK columns are included.
+</ParamField>
+
+<ParamField path="ordinal_column" type="string">
+  A non-primary-key column used for change tracking and ordering. Supported types are integer-like (`bigint`, `integer`) and timestamps (`timestamp`, `timestamptz`). Must not be a primary key column.
+</ParamField>
+
+<ParamField path="filter" type="string">
+  An arbitrary SQL boolean expression to filter rows. Only rows satisfying this condition are included. For example: `"age > 18"`, `"status = 'active'"`, or `"created_at > '2023-01-01'"`. The expression is added as a `WHERE` clause to the SQL queries.
+
+  <Warning>
+    The `filter` expression is inserted directly into SQL queries. When your filter expression is derived from user input, construct it carefully to avoid SQL injection. For example, use the [`psycopg.sql`](https://www.psycopg.org/psycopg3/docs/api/sql.html) module to construct the expression safely.
+
+    Ensure that:
+    - The expression uses valid PostgreSQL syntax
+    - Column names and values are properly quoted if needed
+    - The expression evaluates to a boolean result
+    - You trust the source of the filter expression
+  </Warning>
+</ParamField>
+
+<ParamField path="notification" type="PostgresNotification">
+  When present, enables change capture based on Postgres LISTEN/NOTIFY. See [Change capture](#change-capture) below.
+</ParamField>
+
+### PostgresNotification
+
+<ParamField path="channel_name" type="string">
+  The Postgres notification channel to listen on. CocoIndex creates the channel automatically. If omitted, CocoIndex uses `{flow_name}__{source_name}__cocoindex`.
+</ParamField>
+
+## Output schema
+
+The source produces a [KTable](/core/data-types) with a direct 1-to-1 mapping from PostgreSQL table columns:
+
+| Field category | Description |
+|---|---|
+| Key fields | All primary key columns from the PostgreSQL table |
+| Value fields | All non-primary-key columns (filtered by `included_columns` if specified) |
+
+## Change capture
+
+When `notification` is provided, CocoIndex listens for row changes using Postgres LISTEN/NOTIFY. When the flow starts listening, CocoIndex automatically creates:
+
+- A function to create notification messages: `{channel_name}_n`
+- A trigger to react to table changes: `{channel_name}_t` on the specified `table_name`
+
+<Note>
+  CocoIndex does not automatically clean up the trigger and function when the flow is dropped. To remove them manually, run:
+
+  ```sql
+  DROP TRIGGER IF EXISTS {channel_name}_t ON "{table_name}";
+  DROP FUNCTION IF EXISTS {channel_name}_n();
+  ```
+</Note>
+
+## Example
+
+```python
+import os
+import cocoindex
+
+data_scope["products"] = flow_builder.add_source(
+    cocoindex.sources.Postgres(
+        table_name="source_products",
+        # Optional. Uses the default CocoIndex database if not specified.
+        database=cocoindex.add_transient_auth_entry(
+            cocoindex.DatabaseConnectionSpec(
+                url=os.environ["SOURCE_DATABASE_URL"],
+            )
+        ),
+        # Optional: track changes by this column
+        ordinal_column="modified_time",
+        # Optional: filter rows
+        filter="amount > 0",
+        # Optional: enable change capture
+        notification=cocoindex.sources.PostgresNotification(),
+    ),
+)
+```
+
+A complete end-to-end example is available at [examples/postgres_source](https://github.com/cocoindex-io/cocoindex/tree/main/examples/postgres_source).

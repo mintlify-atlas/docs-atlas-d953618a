@@ -1,0 +1,258 @@
+---
+title: "Data Types"
+description: "All data types in CocoIndex: primitives, vectors, structs, tables, key types, and optional values."
+---
+
+In CocoIndex, all data processed by a flow has a type determined when the flow is defined, before any actual data is processed at runtime. This makes the schema of processed data clear and makes it easy to determine the schema of your index.
+
+## Type system overview
+
+As an engine written in Rust that is designed for use across different languages, CocoIndex defines a type system independent of any specific programming language.
+
+CocoIndex automatically infers data types of outputs created by CocoIndex sources and functions. You don't need to spell out any data type explicitly when you define the flow. All you need to do is ensure that the data passed to functions and targets is compatible with them.
+
+Each type in the CocoIndex type system is mapped to one or multiple Python types.
+
+### Annotations for return values vs. arguments
+
+<CardGroup cols={2}>
+  <Card title="Return values" icon="arrow-right">
+    When you pass a Python value to the engine (e.g. the return value of a custom function), **a specific type annotation is required**. It provides the ground truth of the data type in the flow, and is used to infer data types throughout the flow, create proper target schemas, and enable type checking.
+  </Card>
+  <Card title="Arguments" icon="arrow-left">
+    When you use a Python variable to bind to an engine value (e.g. an argument of a custom function), the engine already knows the type. **A specific type annotation is not required.** You can omit annotations, use `Any` at any level, or provide a specific type annotation as a hint for how to construct the Python value.
+  </Card>
+</CardGroup>
+
+## Basic types
+
+### Primitive types
+
+Primitive types are basic types that are not composed of other types.
+
+| CocoIndex type | Python types | Convertible to | Notes |
+|---|---|---|---|
+| *Bytes* | `bytes` | | |
+| *Str* | `str` | | |
+| *Bool* | `bool` | | |
+| *Int64* | `cocoindex.Int64`, `int`, `numpy.int64` | | |
+| *Float32* | `cocoindex.Float32`, `numpy.float32` | *Float64* | |
+| *Float64* | `cocoindex.Float64`, `float`, `numpy.float64` | | |
+| *Range* | `cocoindex.Range` | | `tuple[int, int]` — start (inclusive) and end (exclusive) offset |
+| *Uuid* | `uuid.UUID` | | |
+| *Date* | `datetime.date` | | |
+| *Time* | `datetime.time` | | |
+| *LocalDatetime* | `cocoindex.LocalDateTime` | *OffsetDatetime* | Without timezone |
+| *OffsetDatetime* | `cocoindex.OffsetDateTime`, `datetime.datetime` | | With timezone |
+| *TimeDelta* | `datetime.timedelta` | | |
+
+**Notes on multiple Python types:**
+
+- When multiple Python types map to the same CocoIndex type, the first one listed is the **default** — CocoIndex creates a value with this type when a specific annotation is not provided.
+- All Python types starting with `cocoindex.` are type aliases exported by CocoIndex:
+  - `cocoindex.Int64` → `int`
+  - `cocoindex.Float64` → `float`
+  - `cocoindex.Float32` → `float`
+  - `cocoindex.Range` → `tuple[int, int]`
+  - `cocoindex.OffsetDateTime` → `datetime.datetime`
+  - `cocoindex.LocalDateTime` → `datetime.datetime`
+- When *Float32* is *convertible to* *Float64*, it means Python types for *Float64* can also bind to a *Float32* value.
+- For *LocalDatetime*, when you use `cocoindex.OffsetDateTime` or `datetime.datetime` as the annotation, the timezone is set to UTC.
+
+### Json type
+
+The *Json* type can hold any data convertible to JSON by the `json` package. In Python, it is represented by `cocoindex.Json`. It is useful for holding data without a fixed schema known at flow definition time.
+
+### Vector types
+
+A vector type is a collection of elements of the same basic type. Optionally, it can have a fixed dimension.
+
+| Notation | Python type |
+|---|---|
+| `Vector[T]` | `cocoindex.Vector[T]` |
+| `Vector[T, Dim]` | `cocoindex.Vector[T, typing.Literal[Dim]]` |
+
+For example, `cocoindex.Vector[cocoindex.Float32, typing.Literal[384]]` represents a 384-dimensional float32 vector.
+
+The underlying Python type is `numpy.typing.NDArray[T]` where `T` is a numpy numeric type, or `list[T]` otherwise.
+
+<Tip>
+  Specify the vector dimension in return type annotations when you plan to export the vector to a target — **most targets require a fixed vector dimension** for creating vector indexes.
+</Tip>
+
+```python
+from typing import Literal
+import cocoindex
+
+# Specify dimension for vectors exported to targets
+@cocoindex.op.function(behavior_version=1)
+def embed_text(text: str) -> cocoindex.Vector[cocoindex.Float32, Literal[768]]:
+    """Generate 768-dimensional embedding."""
+    # ... embedding logic ...
+    return embedding  # numpy array or list of 768 floats
+
+# Works but less precise: Vector without dimension
+@cocoindex.op.function(behavior_version=1)
+def embed_text_no_dim(text: str) -> list[float]:
+    """Generate embedding without dimension specification."""
+    return embedding
+```
+
+### Union types
+
+A union type can represent values of one of multiple basic types. Noted as *Type1* | *Type2* | ... .
+
+In Python, the union type is represented by `T1 | T2 | ...`, e.g. `cocoindex.Int64 | cocoindex.Float32 | cocoindex.Float64`, or `int | float` (equivalent to `cocoindex.Int64 | cocoindex.Float64`).
+
+## Struct types
+
+A *Struct* has a set of fields, each with a name and a type.
+
+In Python, a struct type is represented by a [dataclass](https://docs.python.org/3/library/dataclasses.html), a [NamedTuple](https://docs.python.org/3/library/typing.html#typing.NamedTuple), or a [Pydantic model](https://pydantic.dev/), with all fields annotated with a specific type.
+
+| Option | Description |
+|---|---|
+| **Dataclass** | A flexible class-based structure, mutable by default, using the `@dataclass` decorator. |
+| **NamedTuple** | An immutable tuple-based structure, using `typing.NamedTuple`. |
+| **Pydantic model** | A data validation and parsing structure, inheriting from `pydantic.BaseModel`. Requires the `pydantic` package. |
+
+```python
+from dataclasses import dataclass
+from typing import NamedTuple
+from pydantic import BaseModel
+import datetime
+
+# Using dataclass
+@dataclass
+class Person:
+    first_name: str
+    last_name: str
+    dob: datetime.date
+
+# Using NamedTuple
+class PersonTuple(NamedTuple):
+    first_name: str
+    last_name: str
+    dob: datetime.date
+
+# Using Pydantic
+class PersonModel(BaseModel):
+    first_name: str
+    last_name: str
+    dob: datetime.date
+```
+
+All three (`Person`, `PersonTuple`, and `PersonModel`) are valid Struct types in CocoIndex with identical schemas: three fields — `first_name` (*Str*), `last_name` (*Str*), `dob` (*Date*).
+
+**Annotation rules for Struct:**
+
+- **For return values**: Must use a specific Struct type (dataclass, NamedTuple, or Pydantic model).
+- **For arguments**: Can use `dict[str, Any]` or `Any`. `dict[str, Any]` is the default binding if no specific type annotation is provided.
+
+```python
+from dataclasses import dataclass
+from typing import Any
+import datetime
+
+@dataclass
+class Person:
+    first_name: str
+    last_name: str
+    dob: datetime.date
+
+# Argument can use dict[str, Any]; return must be a specific Struct
+@cocoindex.op.function(behavior_version=1)
+def process_person(person_data: dict[str, Any]) -> Person:
+    return Person(
+        first_name=person_data["first_name"],
+        last_name=person_data["last_name"],
+        dob=person_data["dob"]
+    )
+```
+
+## Table types
+
+A *Table* type models a collection of rows, each with multiple columns. Each column has a specific type.
+
+There are two specific table types: **KTable** and **LTable**.
+
+### KTable
+
+A *KTable* is a table type where one or more columns together serve as the key. The row order is not preserved. Each key column must be a [key type](#key-types). When multiple key columns are present, they form a composite key.
+
+In Python, a *KTable* is represented by `dict[K, V]`:
+
+- **`K` (key type)** can be:
+  - A primitive [key type](#key-types) (e.g. `str`, `int`) for single-part keys.
+  - An immutable Struct type (frozen dataclass or `NamedTuple`) for composite keys.
+- **`V` (value type)** must be a Struct type representing the non-key value fields.
+  - For return values: Must use a specific Struct type.
+  - For arguments: Can use `dict[str, Any]` or `Any`.
+
+For example, `dict[str, Person]` represents a *KTable* with 4 columns: key (*Str*), `first_name` (*Str*), `last_name` (*Str*), `dob` (*Date*). It binds to `dict[str, dict[str, Any]]` when no type annotation is provided.
+
+**Composite key example:**
+
+```python
+@dataclass(frozen=True)
+class PersonKey:
+    id_kind: str
+    id: str
+
+class PersonKeyTuple(NamedTuple):
+    id_kind: str
+    id: str
+```
+
+Then `dict[PersonKey, Person]` or `dict[PersonKeyTuple, PersonTuple]` represents a KTable keyed by both `id_kind` and `id`. Without a specific type annotation, it binds to `dict[tuple[str, str], dict[str, Any]]`.
+
+<Note>
+  When using a Struct as the key, it must be immutable in Python. For a dataclass, annotate with `@dataclass(frozen=True)`. For `NamedTuple`, immutability is built-in. For Pydantic models, use `frozen=True` in the model configuration.
+</Note>
+
+### LTable
+
+An *LTable* is a table type where row order is preserved. *LTable* has no key column.
+
+In Python, an *LTable* is represented by `list[R]`, where `R` must be a Struct type:
+
+- **For return values**: Must use a specific Struct type, e.g. `list[Person]`, `list[PersonTuple]`, or `list[PersonModel]`.
+- **For arguments**: Can use `list[dict[str, Any]]` or `list[Any]`. Defaults to `list[dict[str, Any]]`.
+
+For example, `list[Person]` represents a *LTable* with 3 columns: `first_name` (*Str*), `last_name` (*Str*), `dob` (*Date*).
+
+```python
+@cocoindex.op.function(behavior_version=1)
+def filter_adults(people: list[Any]) -> list[Person]:
+    """Filter people — argument relaxed, return type specific."""
+    return [p for p in people if p["age"] >= 18]
+```
+
+## Key types
+
+The following types are valid key types:
+
+- *Bytes*
+- *Str*
+- *Bool*
+- *Int64*
+- *Range*
+- *Uuid*
+- *Date*
+- *Struct* with all fields being key types (using `@dataclass(frozen=True)` or `NamedTuple`)
+
+## None values and optional types
+
+CocoIndex supports *None* values, which represent the absence of data or an unknown value — distinct from empty strings, zero numbers, or false booleans.
+
+### Optional type
+
+For any data (e.g. a field of a Struct, an argument or return value of a CocoIndex function), if it is optional, its value can be *None*. Use *Optional[T]* to indicate an optional type, e.g. *Optional[Str]*, *Optional[Person]*.
+
+In Python, `None` is represented as `None`, so an optional type can be written as `T | None` or `typing.Optional[T]`.
+
+### None propagation on functions
+
+A function may specify whether each input argument is optional or not. When a non-optional argument receives a *None* value at runtime, the function execution is skipped and the result is *None*.
+
+For example, for the `SplitRecursively` function, the `text` and `chunk_size` arguments are not optional. If either is *None*, the function returns *None*.

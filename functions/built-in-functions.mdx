@@ -1,0 +1,444 @@
+---
+title: Built-in functions
+description: Reference for all built-in transformation and embedding functions in CocoIndex.
+---
+
+CocoIndex ships with built-in functions for common data transformation tasks — parsing, language detection, text splitting, and embedding. Use them directly inside a flow's `transform()` call.
+
+<CardGroup cols={2}>
+  <Card title="ParseJson" icon="brackets-curly" href="#parsejson">
+    Parse a text string into a JSON object.
+  </Card>
+  <Card title="DetectProgrammingLanguage" icon="code" href="#detectprogramminglanguage">
+    Detect the programming language from a filename extension.
+  </Card>
+  <Card title="SplitRecursively" icon="scissors" href="#splitrecursively">
+    Split documents into chunks at natural language boundaries.
+  </Card>
+  <Card title="SplitBySeparators" icon="list" href="#splitbyseparators">
+    Split text by specified regex separators.
+  </Card>
+  <Card title="SentenceTransformerEmbed" icon="vector-square" href="#sentencetransformerembed">
+    Embed text using local SentenceTransformer models.
+  </Card>
+  <Card title="ExtractByLlm" icon="brain" href="#extractbyllm">
+    Extract structured information from text using an LLM.
+  </Card>
+  <Card title="EmbedText" icon="microchip" href="#embedtext">
+    Embed text using LLM APIs (OpenAI, Ollama, Gemini, and more).
+  </Card>
+  <Card title="ColPali functions" icon="image" href="#colpali-functions">
+    Multimodal document retrieval with ColVision models.
+  </Card>
+</CardGroup>
+
+---
+
+## ParseJson
+
+`ParseJson` parses a text string into a JSON value.
+
+**Input data**
+
+<ParamField path="text" type="Str" required>
+  The source text to parse.
+</ParamField>
+
+<ParamField path="language" type="Optional[Str]" default="json">
+  The language of the source text. Only `json` is supported currently.
+</ParamField>
+
+**Returns:** `Json` — the parsed JSON object.
+
+```python
+doc["parsed"] = doc["raw_text"].transform(cocoindex.functions.ParseJson())
+```
+
+---
+
+## DetectProgrammingLanguage
+
+`DetectProgrammingLanguage` detects the programming language of a file based on its filename extension.
+
+**Input data**
+
+<ParamField path="filename" type="Str" required>
+  The filename (including extension) to detect the language for.
+</ParamField>
+
+**Returns:** `Str` or `Null`. Returns the language name if the extension is recognized, or `Null` if not supported. The returned values match the language names listed in [`tree-sitter-language-pack`](https://github.com/Goldziher/tree-sitter-language-pack?tab=readme-ov-file#available-languages).
+
+```python
+doc["language"] = doc["filename"].transform(cocoindex.functions.DetectProgrammingLanguage())
+```
+
+---
+
+## SplitRecursively
+
+`SplitRecursively` splits a document into chunks of a given size. It tries to split at higher-level boundaries first; if a chunk is still too large, it moves to the next level. For example, for a Markdown file it splits at level-1 sections, then level-2, level-3, paragraphs, sentences, and so on.
+
+**Spec parameters**
+
+<ParamField path="custom_languages" type="list[CustomLanguageSpec]">
+  Customize chunking for specific languages using regular expressions. Each entry is a dict with:
+
+  - `language_name` (`str`): Name of the language.
+  - `aliases` (`list[str]`, optional): Alternative names for the language. Duplicate names or aliases across entries are an error.
+  - `separators_regex` (`list[str]`): Regex patterns to split the text, from highest-level boundary to lowest. Example: `[r"\n# ", r"\n## ", r"\n\n", r"\. "]`. See [regex syntax](https://docs.rs/regex/latest/regex/#syntax).
+</ParamField>
+
+**Input data**
+
+<ParamField path="text" type="Str" required>
+  The text to split.
+</ParamField>
+
+<ParamField path="chunk_size" type="Int64" required>
+  The maximum size of each chunk, in bytes.
+</ParamField>
+
+<ParamField path="min_chunk_size" type="Int64" default="chunk_size / 2">
+  The minimum size of each chunk, in bytes.
+</ParamField>
+
+<ParamField path="chunk_overlap" type="Optional[Int64]" default="None">
+  The maximum overlap size between adjacent chunks, in bytes.
+</ParamField>
+
+<ParamField path="language" type="Optional[Str]" default="None">
+  The language of the document. Accepts a language name (e.g. `python`, `markdown`) or a file extension (e.g. `.py`, `.md`). When not provided or unrecognized, the input is treated as plain text.
+</ParamField>
+
+<Note>
+  `SplitRecursively` does its best to produce chunks sized between `min_chunk_size` and `chunk_size`. In rare cases — very short input text or non-splittable blocks — some chunks may fall outside this range. Avoid setting `min_chunk_size` too close to `chunk_size` to give the function room to plan optimal splits.
+</Note>
+
+**Language matching rules**
+
+The `language` field is matched in this order:
+
+1. Against `custom_languages` in the spec — by `language_name` or `aliases`. A `None` language matches an entry with `language_name == ""`.
+2. Against built-in languages (see table below) — by language name, alias, or file extension.
+
+All matching is case-insensitive. If no match is found, the text is treated as plain text.
+
+**Returns:** `KTable` — each row is a chunk with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `location` | `Range` | The location of the chunk |
+| `text` | `Str` | The text of the chunk |
+| `start.offset` | `Int64` | Byte offset of the start position (inclusive) |
+| `start.line` | `Int64` | Line number of the start position (1-indexed) |
+| `start.column` | `Int64` | Column number of the start position (1-indexed) |
+| `end.offset` | `Int64` | Byte offset of the end position (exclusive) |
+| `end.line` | `Int64` | Line number of the end position (1-indexed) |
+| `end.column` | `Int64` | Column number of the end position (1-indexed) |
+
+```python
+doc["chunks"] = doc["content"].transform(
+    cocoindex.functions.SplitRecursively(),
+    language=doc["language"],
+    chunk_size=1000,
+    min_chunk_size=200,
+)
+```
+
+### Supported languages
+
+| Language | Aliases | File extensions |
+|----------|---------|-----------------|
+| c | | `.c` |
+| cpp | c++ | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` |
+| csharp | csharp, cs | `.cs` |
+| css | | `.css`, `.scss` |
+| dtd | | `.dtd` |
+| fortran | f, f90, f95, f03 | `.f`, `.f90`, `.f95`, `.f03` |
+| go | golang | `.go` |
+| html | | `.html`, `.htm` |
+| java | | `.java` |
+| javascript | js | `.js` |
+| json | | `.json` |
+| kotlin | | `.kt`, `.kts` |
+| markdown | md | `.md`, `.mdx` |
+| pascal | pas, dpr, delphi | `.pas`, `.dpr` |
+| php | | `.php` |
+| python | | `.py` |
+| r | | `.r` |
+| ruby | | `.rb` |
+| rust | rs | `.rs` |
+| scala | | `.scala` |
+| solidity | | `.sol` |
+| sql | | `.sql` |
+| swift | | `.swift` |
+| toml | | `.toml` |
+| tsx | | `.tsx` |
+| typescript | ts | `.ts` |
+| xml | | `.xml` |
+| yaml | | `.yaml`, `.yml` |
+
+If the `language` field is not specified or doesn't match any known language, the input is treated as plain text — split based on blank lines, punctuation marks, and whitespace.
+
+---
+
+## SplitBySeparators
+
+`SplitBySeparators` splits text by specified regex separators only, without recursive chunking. Use this when you want direct control over how text is divided — for example, splitting by blank lines or specific delimiters.
+
+**Spec parameters**
+
+<ParamField path="separators_regex" type="list[str]" required>
+  A list of regex patterns to use as separators. See [regex syntax](https://docs.rs/regex/latest/regex/#syntax).
+</ParamField>
+
+<ParamField path="keep_separator" type="Literal['NONE', 'LEFT', 'RIGHT']" default="NONE">
+  Whether to attach the matched separator to the chunk on its left (`LEFT`), right (`RIGHT`), or discard it (`NONE`).
+</ParamField>
+
+<ParamField path="include_empty" type="bool" default="false">
+  Whether to include empty chunks in the output.
+</ParamField>
+
+<ParamField path="trim" type="bool" default="true">
+  Whether to trim whitespace from each chunk.
+</ParamField>
+
+**Input data**
+
+<ParamField path="text" type="Str" required>
+  The text to split.
+</ParamField>
+
+**Returns:** `KTable` — each row is a chunk with the same fields as `SplitRecursively`: `location`, `text`, `start`, and `end`.
+
+```python
+doc["chunks"] = doc["content"].transform(
+    cocoindex.functions.SplitBySeparators(
+        separators_regex=[r"\n\n", r"\n"],
+        keep_separator="LEFT",
+        trim=True,
+    )
+)
+```
+
+---
+
+## SentenceTransformerEmbed
+
+`SentenceTransformerEmbed` embeds a text string into a vector space using the [SentenceTransformer](https://huggingface.co/sentence-transformers) library. Models run locally on your machine.
+
+<Note>
+  This function requires the `sentence-transformers` library, which is an optional dependency. Install it with:
+
+  ```sh
+  pip install 'cocoindex[embeddings]'
+  ```
+</Note>
+
+**Spec parameters**
+
+<ParamField path="model" type="str" required>
+  The name of the SentenceTransformer model to use.
+</ParamField>
+
+<ParamField path="args" type="dict[str, Any]">
+  Additional arguments to pass to the SentenceTransformer constructor. For example: `{"trust_remote_code": True}`.
+</ParamField>
+
+**Input data**
+
+<ParamField path="text" type="Str" required>
+  The text to embed.
+</ParamField>
+
+**Returns:** `Vector[Float32, N]` — where `N` is determined by the model.
+
+```python
+doc["embedding"] = doc["text"].transform(
+    cocoindex.functions.SentenceTransformerEmbed(
+        model="sentence-transformers/all-MiniLM-L6-v2"
+    )
+)
+```
+
+---
+
+## ExtractByLlm
+
+`ExtractByLlm` extracts structured information from text using an LLM. The output shape is determined by the `output_type` you provide.
+
+**Spec parameters**
+
+<ParamField path="llm_spec" type="cocoindex.LlmSpec" required>
+  The LLM to use. See [LLM integration](/functions/llm-integration) for configuration details.
+</ParamField>
+
+<ParamField path="output_type" type="type" required>
+  The Python type of the output — typically a dataclass. The LLM produces values matching the schema of this type. See [Data types](/core/data-types) for all supported types.
+</ParamField>
+
+<ParamField path="instruction" type="str">
+  Additional instruction for the LLM to guide extraction.
+</ParamField>
+
+**Input data**
+
+<ParamField path="text" type="Str" required>
+  The text to extract information from.
+</ParamField>
+
+**Returns:** As specified by `output_type`. The extracted structured information.
+
+<Tip>
+  Definitions of `output_type` are fed into the LLM as guidance. To improve extraction quality:
+
+  - Use readable field names in your dataclasses.
+  - Add docstrings to your dataclasses.
+  - Annotate optional fields explicitly with `SomeType | None` or `typing.Optional[SomeType]`.
+</Tip>
+
+```python
+import dataclasses
+
+@dataclasses.dataclass
+class ArticleInfo:
+    """Structured metadata extracted from an article."""
+    title: str
+    summary: str
+    topics: list[str]
+    author: str | None
+
+doc["info"] = doc["content"].transform(
+    cocoindex.functions.ExtractByLlm(
+        llm_spec=cocoindex.LlmSpec(
+            api_type=cocoindex.LlmApiType.OPENAI,
+            model="gpt-4o",
+        ),
+        output_type=ArticleInfo,
+        instruction="Extract article metadata from the provided text.",
+    )
+)
+```
+
+---
+
+## EmbedText
+
+`EmbedText` embeds a text string into a vector space using LLM APIs that support text embedding.
+
+**Spec parameters**
+
+<ParamField path="api_type" type="cocoindex.LlmApiType" required>
+  The LLM API to use for embedding. See [LLM integration](/functions/llm-integration) for all supported API types.
+</ParamField>
+
+<ParamField path="model" type="str" required>
+  The name of the embedding model.
+</ParamField>
+
+<ParamField path="address" type="str">
+  The address of the LLM API. Uses the default address for the API type if not specified.
+</ParamField>
+
+<ParamField path="output_dimension" type="int">
+  The dimension to request from the embedding API. Some APIs support dimension reduction (e.g. OpenAI). Uses the API's default if not specified.
+</ParamField>
+
+<ParamField path="expected_output_dimension" type="int">
+  The expected dimension of the output vector, used for validation and type schema. Falls back to `output_dimension`, then to the model's default. Required when using a model not yet in CocoIndex's built-in registry.
+</ParamField>
+
+<ParamField path="task_type" type="str">
+  The task type for embedding. Some models use this to optimize the embedding for specific use cases (e.g. `SEMANTICS_SIMILARITY`, `document`, `query`).
+</ParamField>
+
+<Note>
+  Not all LLM APIs support text embedding. See the [supported APIs table](/functions/llm-integration#supported-apis) to check which APIs support embedding.
+</Note>
+
+**Input data**
+
+<ParamField path="text" type="Str" required>
+  The text to embed.
+</ParamField>
+
+**Returns:** `Vector[Float32, N]` — where `N` is the dimension of the embedding vector.
+
+```python
+doc["embedding"] = doc["text"].transform(
+    cocoindex.functions.EmbedText(
+        api_type=cocoindex.LlmApiType.OPENAI,
+        model="text-embedding-3-small",
+        output_dimension=1536,
+    )
+)
+```
+
+---
+
+## ColPali functions
+
+ColPali functions enable multimodal document retrieval using ColVision models. They support all models available in the [colpali-engine library](https://github.com/illuin-tech/colpali), including:
+
+- **ColPali models** (`colpali-*`): PaliGemma-based, best for general document retrieval.
+- **ColQwen2 models** (`colqwen-*`): Qwen2-VL-based, excellent for multilingual text (29+ languages) and general vision.
+- **ColSmol models** (`colsmol-*`): Lightweight, suited for resource-constrained environments.
+
+These models use late interaction between image patch embeddings and text token embeddings for retrieval.
+
+<Note>
+  These functions require the `colpali-engine` library, which is an optional dependency. Install it with:
+
+  ```sh
+  pip install 'cocoindex[colpali]'
+  ```
+</Note>
+
+### ColPaliEmbedImage
+
+`ColPaliEmbedImage` embeds images using ColVision multimodal models.
+
+**Spec parameters**
+
+<ParamField path="model" type="str" required>
+  Any ColVision model name supported by colpali-engine — for example, `"vidore/colpali-v1.2"`, `"vidore/colqwen2.5-v0.2"`, or `"vidore/colsmol-v1.0"`. See the [complete list of supported models](https://github.com/illuin-tech/colpali#list-of-colvision-models).
+</ParamField>
+
+**Input data**
+
+<ParamField path="img_bytes" type="Bytes" required>
+  The image data in bytes format.
+</ParamField>
+
+**Returns:** `Vector[Vector[Float32, N]]` — a multi-vector format with variable patches and a fixed hidden dimension `N` determined by the model.
+
+```python
+doc["image_embedding"] = doc["image_bytes"].transform(
+    cocoindex.functions.ColPaliEmbedImage(model="vidore/colpali-v1.2")
+)
+```
+
+### ColPaliEmbedQuery
+
+`ColPaliEmbedQuery` embeds text queries using ColVision multimodal models. The resulting query embeddings are compatible with `ColPaliEmbedImage` embeddings for late interaction scoring (MaxSim).
+
+**Spec parameters**
+
+<ParamField path="model" type="str" required>
+  Any ColVision model name supported by colpali-engine — for example, `"vidore/colpali-v1.2"`, `"vidore/colqwen2.5-v0.2"`, or `"vidore/colsmol-v1.0"`. See the [complete list of supported models](https://github.com/illuin-tech/colpali#list-of-colvision-models).
+</ParamField>
+
+**Input data**
+
+<ParamField path="query" type="Str" required>
+  The text query to embed.
+</ParamField>
+
+**Returns:** `Vector[Vector[Float32, N]]` — a multi-vector format with variable tokens and a fixed hidden dimension `N` determined by the model.
+
+```python
+query_embedding = cocoindex.functions.ColPaliEmbedQuery(
+    model="vidore/colpali-v1.2"
+).embed("What does the revenue chart show?")
+```

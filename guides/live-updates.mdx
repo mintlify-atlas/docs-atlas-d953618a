@@ -1,0 +1,195 @@
+---
+title: Live updates
+description: Keep your indexes synchronized with source data using refresh intervals, change capture mechanisms, and the FlowLiveUpdater API.
+---
+
+CocoIndex is designed to keep your indexes synchronized with your data sources. **Live updates** automatically detect changes in your sources and update your indexes incrementally — only re-processing affected data, not the entire dataset.
+
+## How live updates work
+
+Live updates are triggered in two ways:
+
+<AccordionGroup>
+  <Accordion title="Refresh interval">
+    Set a `refresh_interval` on any source. CocoIndex periodically checks for new, updated, or deleted data. This works for any source that doesn't have a built-in change notification system.
+
+    ```python
+    @cocoindex.flow_def(name="LiveUpdateExample")
+    def live_update_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+        data_scope["documents"] = flow_builder.add_source(
+            cocoindex.sources.LocalFile(path="data"),
+            refresh_interval=datetime.timedelta(seconds=5),
+        )
+    ```
+
+    Setting `refresh_interval` to 5 seconds tells CocoIndex to check the `data` directory for changes every 5 seconds.
+  </Accordion>
+  <Accordion title="Source-specific change capture">
+    Some sources support more efficient change detection:
+
+    - **Amazon S3** — configure an SQS queue to receive notifications when files are added, modified, or deleted. CocoIndex listens to the queue and triggers updates immediately.
+    - **Google Drive** — polls for recent changes, which is more efficient than a full refresh.
+    - **PostgreSQL** — supports CDC (change data capture) for row-level change notifications.
+  </Accordion>
+</AccordionGroup>
+
+When a change is detected, CocoIndex performs an **incremental update**: only re-processes data affected by the change.
+
+## Running live updates
+
+<Tabs>
+  <Tab title="CLI">
+    Use the `update` command with the `-L` (or `--live`) flag:
+
+    ```sh
+    cocoindex update -L your_flow_definition_file.py
+    ```
+
+    This starts a long-running process that continuously monitors your sources and updates your indexes. Stop it with `Ctrl+C`.
+  </Tab>
+  <Tab title="Python API">
+    Use the `FlowLiveUpdater` class for programmatic control. This is useful when integrating CocoIndex into a larger application.
+
+    ```python
+    import cocoindex
+
+    with cocoindex.FlowLiveUpdater(live_update_flow, cocoindex.FlowLiveUpdaterOptions(print_stats=True)) as updater:
+        print("Live updater started. Press Ctrl+C to stop.")
+        updater.wait()
+
+    print("Live updater stopped.")
+    ```
+
+    Used as a context manager, `FlowLiveUpdater` starts automatically on entry and stops on exit. `wait()` blocks until the updater is aborted (for example, by pressing `Ctrl+C`).
+  </Tab>
+</Tabs>
+
+## FlowLiveUpdater API
+
+### Constructor
+
+```python
+cocoindex.FlowLiveUpdater(flow, options=None)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `flow` | `cocoindex.Flow` | The flow instance to run live updates for. |
+| `options` | `FlowLiveUpdaterOptions` | Optional configuration. |
+
+**`FlowLiveUpdaterOptions` fields** (all optional):
+
+| Field | Description |
+|---|---|
+| `live_mode` | Whether to run in live mode. |
+| `print_stats` | Print update statistics to stdout. |
+| `reexport_targets` | Re-export all targets on startup. |
+
+### Methods
+
+| Method | Description |
+|---|---|
+| `start()` | Start the updater in the background. |
+| `abort()` | Signal the updater to stop. |
+| `wait()` | Block until the updater is stopped. |
+| `next_status_updates()` | Block until a new status update is available, then return it. |
+
+Async equivalents: `start_async()`, `wait_async()`, `next_status_updates_async()`.
+
+### Context manager
+
+Using `FlowLiveUpdater` as a context manager calls `start()` on entry and `abort()` + `wait()` on exit:
+
+```python
+with cocoindex.FlowLiveUpdater(live_update_flow, cocoindex.FlowLiveUpdaterOptions(print_stats=True)) as updater:
+    updater.wait()
+```
+
+### Monitoring status updates
+
+Use `next_status_updates()` to react to changes in your application — for example, to notify users or trigger downstream processes:
+
+```python
+import cocoindex
+
+updater = cocoindex.FlowLiveUpdater(live_update_flow)
+updater.start()
+
+while True:
+    updates = updater.next_status_updates()
+
+    if not updates.active_sources:
+        print("All sources have finished processing.")
+        break
+
+    for source_name in updates.updated_sources:
+        print(f"Source '{source_name}' has been updated.")
+
+updater.wait()
+```
+
+## Full example
+
+The steps below walk through a complete live update setup.
+
+<Steps>
+  <Step title="Define the flow with a refresh interval">
+    Configure a `LocalFile` source with a `refresh_interval` and export to Postgres:
+
+    ```python
+    import datetime
+
+    @cocoindex.flow_def(name="LiveUpdateExample")
+    def live_update_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+        data_scope["documents"] = flow_builder.add_source(
+            cocoindex.sources.LocalFile(path="data"),
+            refresh_interval=datetime.timedelta(seconds=5),
+        )
+
+        collector = data_scope.add_collector()
+        with data_scope["documents"].row() as doc:
+            collector.collect(filename=doc["filename"], content=doc["content"])
+
+        collector.export(
+            "documents_index",
+            cocoindex.targets.Postgres(),
+            primary_key_fields=["filename"]
+        )
+    ```
+  </Step>
+  <Step title="Initialize and set up the flow">
+    Initialize CocoIndex and call `setup()` to create backend resources:
+
+    ```python
+    def main():
+        cocoindex.init()
+        live_update_flow.setup(report_to_stdout=True)
+    ```
+  </Step>
+  <Step title="Start the live updater">
+    Run the updater and block until stopped:
+
+    ```python
+        with cocoindex.FlowLiveUpdater(live_update_flow, cocoindex.FlowLiveUpdaterOptions(print_stats=True)) as updater:
+            print("Live updater started. Watching for changes in the 'data' directory.")
+            updater.wait()
+
+    if __name__ == "__main__":
+        main()
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+For a complete runnable version, see the [live updates example](https://github.com/cocoindex-io/cocoindex/tree/main/examples/live_updates) in the CocoIndex repository.
+</Tip>
+
+## Running a server with live updates
+
+You can combine the HTTP server with live updates using the `cocoindex server` command and the `-L` flag:
+
+```sh
+cocoindex server path/to/app.py -L
+```
+
+This starts the HTTP server and performs live updates simultaneously — equivalent to running `cocoindex update -L` while the server is running. See [CocoInsight access](/guides/querying) for full server options.

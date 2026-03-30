@@ -1,0 +1,443 @@
+---
+title: "Flow Definition"
+description: "Define a CocoIndex flow by specifying sources, transformations, and targets, and connect the input/output data of operations."
+---
+
+In CocoIndex, to define an indexing flow, you provide a function to import sources, transform data, and put results into targets. You connect the input/output of these operations with fields of data scopes.
+
+## Entry point
+
+A CocoIndex flow is defined by a function that receives a `FlowBuilder` and a `DataScope`.
+
+### Using the decorator
+
+The easiest way is to use the `@cocoindex.flow_def` decorator:
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+```
+
+This declares the function as a CocoIndex flow definition. The decorator takes two arguments:
+
+- `flow_builder` — a `FlowBuilder` object to help build the flow.
+- `data_scope` — a `DataScope` object representing the top-level data scope. Any data created by the flow should be added to it.
+
+### Using `open_flow()`
+
+For more flexibility (e.g. conditional registration or dynamic names), you can explicitly call `cocoindex.open_flow()`:
+
+```python
+def demo_flow_def(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+
+# Add the flow definition to the flow registry.
+demo_flow = cocoindex.open_flow("DemoFlow", demo_flow_def)
+```
+
+In both cases, `demo_flow` will be an object of `cocoindex.Flow` type. See [Flow Operations](/core/flow-operations) for details on how to run it.
+
+### Closing a flow
+
+To remove a flow's states from memory without affecting persistent state:
+
+```python
+demo_flow.close()
+```
+
+After it's called, `demo_flow` becomes an invalid object and you should not call any methods on it.
+
+<Note>
+  `close()` only removes states from the current process. It does not clean up persistent backends. See [Setup / drop flow](/core/flow-operations#setupdrop-flow) to clean up persistent state.
+</Note>
+
+## Data scope
+
+A **data scope** represents data for a certain unit — for example, the top-level scope (involving all data for a flow), a document scope, or a chunk scope. A data scope has a set of fields and collectors, and users can add new fields and collectors to it.
+
+### Get or add a field
+
+Getting and setting a field of a data scope is done with the `[]` operator and a field name:
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+
+    # Add "documents" to the top-level data scope.
+    data_scope["documents"] = flow_builder.add_source(DemoSourceSpec(...))
+
+    # Each row of "documents" is a child scope.
+    with data_scope["documents"].row() as document:
+
+        # Get "content" from the document scope, transform, and add "summary" to scope.
+        document["summary"] = document["content"].transform(DemoFunctionSpec(...))
+```
+
+<Note>
+  You cannot override an existing field.
+</Note>
+
+## Data slice
+
+A **data slice** references a subset of data belonging to a data scope, e.g. a specific field. A data slice has a certain data type and is the input for most operations.
+
+<Note>
+  The actual value of data is not available at the time you define the flow — it's only available at runtime. In a flow definition, you use a data representation as input for operations, but you cannot access the actual value.
+</Note>
+
+### Import from source
+
+To get the initial data slice, import data from a source. `FlowBuilder` provides `add_source()` to import data from external sources. A _source spec_ is required to describe the source and its parameters. Import must happen at the top level, and the field created by import must be in the top-level struct.
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    data_scope["documents"] = flow_builder.add_source(DemoSourceSpec(...))
+    ...
+```
+
+#### Parameters
+
+<ParamField path="spec" type="SourceSpec" required>
+  The source spec describing the data source.
+</ParamField>
+
+<ParamField path="name" type="str">
+  Optional name for the field created in the data scope.
+</ParamField>
+
+<ParamField path="refresh_interval" type="datetime.timedelta">
+  When present, in [live update mode](/core/flow-operations#live-update), the data source will be refreshed at this interval.
+
+  ```python
+  data_scope["documents"] = flow_builder.add_source(
+      DemoSourceSpec(...), refresh_interval=datetime.timedelta(minutes=1))
+  ```
+</ParamField>
+
+<ParamField path="max_inflight_rows" type="int">
+  Limits the maximum number of rows from this source processed concurrently. See [Concurrency controls](#concurrency-controls).
+</ParamField>
+
+<ParamField path="max_inflight_bytes" type="int">
+  Limits the total memory footprint of data from this source processed concurrently. See [Concurrency controls](#concurrency-controls).
+</ParamField>
+
+<Info>
+  In live update mode, for each refresh, CocoIndex lists rows in the data source to figure out changes based on metadata such as last-modified time, and only performs transformations on changed source keys. If nothing changed during the last refresh cycle, only list operations are performed, which is usually cheap for most data sources.
+</Info>
+
+### Transform
+
+The `transform()` method transforms a data slice by a function, creating another data slice. A _function spec_ is required to describe the function and its parameters.
+
+The first argument is the data slice being transformed (via the `transform()` method). Other arguments can be passed as positional or keyword arguments after the function spec.
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+    data_scope["field2"] = data_scope["field1"].transform(
+                               DemoFunctionSpec(...),
+                               arg1, arg2, ..., key0=kwarg0, key1=kwarg1, ...)
+    ...
+```
+
+### For-each-row
+
+If the data slice has a [table type](/core/data-types#table-types), you can call the `row()` method to obtain a child scope representing each row, to apply operations on each row.
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+    with data_scope["table1"].row() as table1_row:
+        # Children operations
+        table1_row["field2"] = table1_row["field1"].transform(DemoFunctionSpec(...))
+```
+
+<ParamField path="max_inflight_rows" type="int">
+  Limits the maximum number of rows processed concurrently within this scope.
+</ParamField>
+
+<ParamField path="max_inflight_bytes" type="int">
+  Limits the total memory footprint of data within this scope processed concurrently.
+</ParamField>
+
+### Get a sub-field
+
+If the data slice has `Struct` type, you can obtain a data slice on a specific sub-field of it, similar to getting a field of a data scope.
+
+## Data collector
+
+A **data collector** can be added from a specific data scope and it collects multiple entries of data from the same or child scopes.
+
+### Add a collector
+
+```python
+demo_collector = data_scope.add_collector()
+```
+
+### Collect
+
+Call `collect()` to collect a specific entry, which can have multiple fields. Each field has a name specified by the argument name and a value in one of the following representations:
+
+- A `DataSlice`.
+- `cocoindex.GeneratedField.UUID` — a UUID automatically generated by the engine. The UUID remains stable when other collected input values are unchanged.
+
+<Note>
+  An automatically generated UUID field is allowed to appear at most once per `collect()` call.
+</Note>
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+    demo_collector = data_scope.add_collector()
+    with data_scope["documents"].row() as document:
+        ...
+        demo_collector.collect(id=cocoindex.GeneratedField.UUID,
+                               filename=document["filename"],
+                               summary=document["summary"])
+    ...
+```
+
+In this example, the collector is in the top-level data scope. It collects `filename` and `summary` fields from each row of `documents`, and generates a stable `id` UUID whenever `filename` and `summary` are unchanged.
+
+### Export
+
+The `export()` method exports the collected data to an external target. A _target spec_ is required. Export must happen at the top level of a flow (not within any child scopes created by _for each row_).
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+    demo_collector = data_scope.add_collector()
+    ...
+    demo_collector.export(
+        "demo_target", DemoTargetSpec(...),
+        primary_key_fields=["field1"],
+        vector_indexes=[cocoindex.VectorIndexDef("field2", cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY)])
+```
+
+#### Parameters
+
+<ParamField path="name" type="str" required>
+  The name to identify the export target. Must remain stable across different runs — if it changes, CocoIndex treats it as an old target removed and a new one created.
+</ParamField>
+
+<ParamField path="target_spec" type="TargetSpec" required>
+  The target spec describing the export target.
+</ParamField>
+
+<ParamField path="primary_key_fields" type="Sequence[str]" required>
+  The fields to use as the primary key. Types of the fields must be [key types](/core/data-types#key-types).
+</ParamField>
+
+<ParamField path="attachments" type="Sequence[TargetAttachmentSpec]">
+  Additional attachments for the export target. Different targets support different attachments. For example, `Postgres` supports `PostgresSqlAttachment` for arbitrary SQL statements after the target is created or before it is dropped.
+</ParamField>
+
+<ParamField path="vector_indexes" type="Sequence[VectorIndexDef]">
+  Vector indexes to create on the target. See [Vector index](#vector-index).
+</ParamField>
+
+<ParamField path="fts_indexes" type="Sequence[FtsIndexDef]">
+  Full-text search indexes to create on the target. See [Full-text search index](#full-text-search-fts-index).
+</ParamField>
+
+<ParamField path="setup_by_user" type="bool" default="False">
+  Whether the export target is set up by the user. By default, CocoIndex manages the target setup. If `True`, users are responsible for creating the target and updating it upon schema changes.
+</ParamField>
+
+## Storage indexes
+
+Many targets are storage systems supporting indexes to boost retrieval efficiency. CocoIndex provides a common way to configure indexes for various targets.
+
+### Primary key
+
+Primary key is specified by `primary_key_fields` (`Sequence[str]`). Types of the fields must be [key types](/core/data-types#key-types).
+
+### Vector index
+
+Vector index is specified by `vector_indexes` (`Sequence[VectorIndexDef]`).
+
+`VectorIndexDef` has the following fields:
+
+<ParamField path="field_name" type="str" required>
+  The field to create the vector index on.
+</ParamField>
+
+<ParamField path="metric" type="VectorSimilarityMetric" required>
+  The similarity metric to use.
+</ParamField>
+
+<ParamField path="method" type="HnswVectorIndexMethod | IvfFlatVectorIndexMethod">
+  The index algorithm and optional tuning parameters. Leave unset to use the target default (HNSW for Postgres). Use `cocoindex.HnswVectorIndexMethod()` or `cocoindex.IvfFlatVectorIndexMethod()` to customize.
+</ParamField>
+
+#### Similarity metrics
+
+| Metric name | Description | Similarity order |
+|---|---|---|
+| `CosineSimilarity` | [Cosine similarity](https://en.wikipedia.org/wiki/Cosine_similarity) | Larger is more similar |
+| `L2Distance` | [L2 distance (Euclidean distance)](https://en.wikipedia.org/wiki/Euclidean_distance) | Smaller is more similar |
+| `InnerProduct` | [Inner product](https://en.wikipedia.org/wiki/Inner_product_space) | Larger is more similar |
+
+### Full-text search (FTS) index
+
+Full-text search index is specified by `fts_indexes` (`Sequence[FtsIndexDef]`).
+
+`FtsIndexDef` has the following fields:
+
+<ParamField path="field_name" type="str" required>
+  The field to create the FTS index on.
+</ParamField>
+
+<ParamField path="parameters" type="dict">
+  A dictionary of parameters to pass to the target's FTS index creation. Supported parameters vary by target.
+</ParamField>
+
+```python
+demo_collector.export(
+    "demo_target", DemoTargetSpec(...),
+    primary_key_fields=["id"],
+    fts_indexes=[
+        # Basic FTS index with default tokenizer
+        cocoindex.FtsIndexDef("content"),
+        # FTS index with custom tokenizer
+        cocoindex.FtsIndexDef("description", parameters={"language": "English"})
+    ])
+```
+
+<Note>
+  FTS indexes are currently only supported for the LanceDB target on its enterprise edition. Other targets will raise an error if FTS indexes are specified.
+</Note>
+
+## Auth registry
+
+CocoIndex manages an auth registry — an in-memory key-value store mainly used to store authentication information for backends. It is typically used for targets, where key stability is important for backend cleanup.
+
+Operation spec is the default way to configure sources, functions, and targets, but it has limitations:
+
+- The spec is frequently shown in various places (e.g. `cocoindex show`) and is not suitable for storing secrets.
+- For targets, once an operation is removed after a code change, its spec is also gone — but CocoIndex still needs to be able to drop the persistent backend.
+
+The auth registry solves these problems.
+
+### Auth entry
+
+An **auth entry** is an entry in the auth registry with an explicit key.
+
+Add an auth entry with `cocoindex.add_auth_entry()`, which returns a `cocoindex.AuthEntryReference[T]`:
+
+```python
+my_graph_conn = cocoindex.add_auth_entry(
+    "my_graph_conn",
+    cocoindex.targets.Neo4jConnectionSpec(
+            uri="bolt://localhost:7687",
+            user="neo4j",
+            password="cocoindex",
+    ))
+```
+
+Reference it when building a spec that accepts an auth entry:
+
+<CodeGroup>
+
+```python By object reference
+demo_collector.export(
+    "MyGraph",
+    cocoindex.targets.Neo4jRelationship(connection=my_graph_conn, ...)
+)
+```
+
+```python By key string
+demo_collector.export(
+    "MyGraph",
+    cocoindex.targets.Neo4jRelationship(connection=cocoindex.ref_auth_entry("my_graph_conn"), ...))
+```
+
+</CodeGroup>
+
+<Warning>
+  Keep the auth entry key stable. If the key doesn't change, it's considered to be the same backend (even if the connection details change). If a key is no longer referenced in any operation spec, keep it until the next flow setup/drop so CocoIndex can clean up the backends.
+</Warning>
+
+### Transient auth entry
+
+A **transient auth entry** is an entry with an automatically generated key. It's typically used for sources and functions where key stability is not important.
+
+```python
+flow_builder.add_source(
+    cocoindex.sources.AzureBlob(
+        ...
+        sas_token=cocoindex.add_transient_auth_entry("...")
+    )
+)
+```
+
+Wherever a `TransientAuthEntryReference[T]` is expected, you can also pass an `AuthEntryReference[T]`, as `AuthEntryReference[T]` is a subtype of `TransientAuthEntryReference[T]`.
+
+## Concurrency controls
+
+CocoIndex processes data in parallel to maximize throughput, but unconstrained parallelism can overwhelm your system. Processing too many items simultaneously can lead to:
+
+- **Memory exhaustion** — large datasets loaded concurrently can consume excessive RAM.
+- **Resource contention** — too many parallel operations competing for CPU, disk I/O, or network bandwidth.
+- **System instability** — high concurrency can cause timeouts, crashes, or degraded performance.
+
+Two options control how many data items are processed simultaneously:
+
+<ParamField path="max_inflight_rows" type="int">
+  Limits the maximum number of data rows being processed concurrently. When this limit is reached, CocoIndex pauses loading new data until some of the current processing completes.
+</ParamField>
+
+<ParamField path="max_inflight_bytes" type="int">
+  Limits the total memory footprint of data being processed concurrently (measured in bytes). Only counts the size of data that already exists in memory before any transformations are applied.
+</ParamField>
+
+These options can be configured at different levels:
+
+- **Source level** via `FlowBuilder.add_source()` — controls how many rows from a data source are processed simultaneously.
+- **Row iteration level** via `DataSlice.row()` — provides fine-grained control over parallel processing within nested data structures.
+
+You can also set global limits across all sources and flows using [`GlobalExecutionOptions`](/core/settings#globalexecutionoptions) or the environment variables `COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS` / `COCOINDEX_SOURCE_MAX_INFLIGHT_BYTES`. When both global and per-source limits are specified, both are enforced independently.
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    data_scope["documents"] = flow_builder.add_source(
+        DemoSourceSpec(...), max_inflight_rows=10, max_inflight_bytes=100*1024*1024)
+
+    with data_scope["documents"].row() as doc:
+        doc["chunks"] = doc["content"].transform(SplitRecursively(...))
+        with doc["chunks"].row(max_inflight_rows=100) as chunk:
+            ...
+```
+
+## Getting the app namespace
+
+You can use the [`app_namespace` setting](/core/settings#app-namespace) or `COCOINDEX_APP_NAMESPACE` environment variable to specify the app namespace, to organize flows across different environments (e.g., dev, staging, production), team members, etc.
+
+In code, call `cocoindex.get_app_namespace()` to get the current app namespace. It takes the following argument:
+
+<ParamField path="trailing_delimiter" type="str">
+  A string to append to the app namespace when it is not empty.
+</ParamField>
+
+For example, when the current app namespace is `Staging`, `cocoindex.get_app_namespace(trailing_delimiter='.')` returns `Staging.`.
+
+```python
+doc_embeddings.export(
+    "doc_embeddings",
+    cocoindex.targets.Qdrant(
+        collection_name=cocoindex.get_app_namespace(trailing_delimiter='__') + "doc_embeddings",
+        ...
+    ),
+    ...
+)
+```
+
+This uses `Staging__doc_embeddings` as the collection name when the app namespace is `Staging`, and `doc_embeddings` when the namespace is empty.

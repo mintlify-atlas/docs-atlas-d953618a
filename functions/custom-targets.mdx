@@ -1,0 +1,231 @@
+---
+title: Custom targets
+description: Build custom export targets in CocoIndex to write data to any destination — databases, cloud storage, file systems, or APIs.
+---
+
+A custom target lets you export data to any destination — databases, cloud storage, file systems, APIs, or other external systems. You can continuously update the destination to keep it in sync with the latest data, or publish changes as a changelog.
+
+## Overview
+
+Custom targets are defined by two components:
+
+- A **target spec** — configures the connection parameters for the target.
+- A **target connector** — handles the actual data export operations.
+
+The connector deals with two categories of changes:
+
+- **Setup changes** — basic infrastructure changes (e.g. creating or deleting a table or directory) that happen when a target is added, removed, or reconfigured. Handled by `apply_setup_change()`.
+- **Data changes** — inserts, updates, and deletes for specific rows, triggered as the flow runs. Handled by `mutate()`.
+
+CocoIndex manages when to call these methods. Your connector only needs to implement the actual side effects.
+
+---
+
+## Target spec
+
+The target spec defines configuration parameters for your custom target. When you use the target in a flow via [`export()`](/core/flow-definition#export), you instantiate the spec with specific values.
+
+Define the spec as a class that inherits from `cocoindex.op.TargetSpec`:
+
+```python
+class CustomTarget(cocoindex.op.TargetSpec):
+    """
+    Documentation for the target.
+    """
+    param1: str
+    param2: int | None = None
+```
+
+<Note>
+  All spec fields must be serializable and deserializable by the `json` module. Spec subclasses can be instantiated like dataclasses: `CustomTarget(param1="value")`.
+</Note>
+
+---
+
+## Target connector
+
+Define the connector as a class decorated with `@cocoindex.op.target_connector()`:
+
+```python
+@cocoindex.op.target_connector(spec_cls=CustomTarget)
+class CustomTargetConnector:
+    # Setup methods
+    @staticmethod
+    def get_persistent_key(spec: CustomTarget, target_name: str) -> PersistentKey:
+        """Required. Return a stable, unique key for this target instance."""
+        ...
+
+    @staticmethod
+    def apply_setup_change(
+        key: PersistentKey, previous: CustomTarget | None, current: CustomTarget | None
+    ) -> None:
+        """Required. Apply setup changes to the target."""
+        ...
+
+    @staticmethod
+    def describe(key: PersistentKey) -> str:
+        """Optional. Return a human-readable description of the target."""
+        ...
+
+    # Data methods
+    @staticmethod
+    def prepare(spec: CustomTarget) -> PreparedCustomTarget:
+        """Optional. Prepare for execution before applying mutations."""
+        ...
+
+    @staticmethod
+    def mutate(
+        *all_mutations: tuple[PreparedCustomTarget, dict[DataKeyType, DataValueType | None]],
+    ) -> None:
+        """Required. Apply data mutations to the target."""
+        ...
+```
+
+---
+
+## Setup methods
+
+Setup methods manage the target infrastructure: creating, reconfiguring, and cleaning up resources.
+
+### `get_persistent_key(spec, target_name)` (Required)
+
+Returns a stable unique identifier for the target instance. CocoIndex uses this key to track target state across runs. If a previously seen key no longer exists, CocoIndex assumes the target was removed and calls `apply_setup_change` with `current=None`.
+
+The return value must be serializable by the `json` module.
+
+### `apply_setup_change(key, previous, current)` (Required)
+
+Called when the target configuration changes. Implement it to:
+
+- Create resources when a target is first added (`previous` is `None`).
+- Update configuration when the spec changes.
+- Clean up resources when a target is removed (`current` is `None`).
+
+### `describe(key)` (Optional)
+
+Returns a human-readable description of the target, used for logging and debugging.
+
+---
+
+## Data methods
+
+Data methods handle actual data operations: inserting, updating, and deleting records in the target.
+
+### `mutate(*all_mutations)` (Required)
+
+Applies data changes to the target. Receives multiple mutation batches, where each batch is a tuple of:
+
+- The prepared target spec (`PreparedCustomTarget`, or `CustomTarget` if `prepare` is not provided).
+- A dictionary of mutations (`dict[DataKeyType, DataValueType | None]`).
+  - Each entry is a mutation for a single row.
+  - `None` value means deletion; any other value means upsert.
+
+Key and value type requirements:
+
+- `DataKeyType` must be immutable — use a `@dataclass(frozen=True)` or a `NamedTuple`.
+- `DataValueType` can be a `dataclass`, `NamedTuple`, or `dict[str, Any]`.
+- When there is a single primary key column with a basic type (e.g. `str` or `int`), you can use that type directly as `DataKeyType`.
+
+### `prepare(spec)` (Optional)
+
+Performs common setup before mutations are applied (e.g. opening a connection). The returned value is passed as the first element of each tuple in `mutate()` instead of the original spec.
+
+```python
+@staticmethod
+def prepare(spec: CustomTarget) -> PreparedCustomTarget:
+    # Initialize connections, validate configuration, etc.
+    return PreparedCustomTarget(...)
+```
+
+---
+
+## Best practices
+
+<Note>
+  `apply_setup_change()` and `mutate()` must be **idempotent**. If the system is interrupted mid-operation, these methods may be called again with the same arguments. Your implementation should produce the same result regardless of how many times it is called.
+
+  For example:
+  - `apply_setup_change()` creating a directory should be a no-op if the directory already exists.
+  - `mutate()` deleting a row should be a no-op if the row does not exist.
+</Note>
+
+---
+
+## Example
+
+This example defines a custom target that writes files to the local file system, keyed by filename:
+
+```python
+import dataclasses
+import cocoindex
+
+# 1. Define the target spec
+class MyCustomTarget(cocoindex.op.TargetSpec):
+    """Spec of the custom target, configuring the output location."""
+    location: str
+
+# 2. Define the value dataclass for exported data
+@dataclasses.dataclass
+class LocalFileTargetValues:
+    """Value fields of exported data."""
+    author: str
+    html: str
+
+# 3. Define the target connector
+@cocoindex.op.target_connector(spec_cls=MyCustomTarget)
+class LocalFileTargetConnector:
+    @staticmethod
+    def get_persistent_key(spec: MyCustomTarget, target_name: str) -> str:
+        return spec.location
+
+    @staticmethod
+    def apply_setup_change(
+        key: str, previous: MyCustomTarget | None, current: MyCustomTarget | None
+    ) -> None:
+        # Create or remove the output directory here
+        ...
+
+    @staticmethod
+    def mutate(
+        *all_mutations: tuple[MyCustomTarget, dict[str, LocalFileTargetValues | None]],
+    ) -> None:
+        for spec, mutations in all_mutations:
+            for filename, mutation in mutations.items():
+                if mutation is None:
+                    # Delete the file
+                    ...
+                else:
+                    # Write the file with author and html content
+                    ...
+
+# 4. Use the target in a flow
+@cocoindex.flow_def(name="ExampleFlow")
+def example_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope) -> None:
+    data_scope["documents"] = flow_builder.add_source(...)
+
+    output_data = data_scope.add_collector()
+
+    with data_scope["documents"].row() as doc:
+        output_data.collect(
+            filename=doc["filename"],
+            author=doc["author"],
+            html=doc["transformed_html"]
+        )
+
+    output_data.export(
+        "OutputData",
+        MyCustomTarget(location="/path/to/output"),
+        primary_key_fields=["filename"],
+    )
+```
+
+In this example:
+- `str` is the `DataKeyType` (the filename).
+- `LocalFileTargetValues` is the `DataValueType` (containing `author` and `html` fields).
+- `mutate()` receives tuples of `(MyCustomTarget, dict[str, LocalFileTargetValues | None])`.
+
+<Note>
+  Type hints on `mutate()` can be omitted. In that case, CocoIndex passes a plain `dict` instead of a dataclass instance, with field names as keys.
+</Note>
+
+See the [custom_output_files](https://github.com/cocoindex-io/cocoindex/blob/main/examples/custom_output_files/main.py) example for a complete end-to-end implementation.

@@ -1,0 +1,146 @@
+---
+title: Quickstart
+description: Build a text embedding index end to end in under 10 minutes.
+---
+
+In this tutorial, you'll build an index with text embeddings, keeping it minimal and focused on the core indexing flow.
+
+**What you'll build:**
+
+1. Read text files from the local filesystem
+2. Chunk each document
+3. Embed each chunk with a text embedding model
+4. Store the embeddings in Postgres with a vector index for retrieval
+
+## Prerequisites
+
+- CocoIndex installed with the `embeddings` extra
+- A running Postgres instance with pgvector
+
+If you haven't done this yet, follow the [installation guide](/getting-started/installation) first.
+
+## Tutorial
+
+<Steps>
+  <Step title="Install CocoIndex with embeddings support">
+    ```bash
+    pip install -U 'cocoindex[embeddings]'
+    ```
+  </Step>
+
+  <Step title="Create a project directory">
+    ```bash
+    mkdir cocoindex-quickstart
+    cd cocoindex-quickstart
+    ```
+
+    Place your input Markdown files in a subdirectory called `markdown_files`.
+  </Step>
+
+  <Step title="Define the flow">
+    Create a file `main.py` and add the following:
+
+    ```python main.py
+    import cocoindex
+
+    @cocoindex.flow_def(name="TextEmbedding")
+    def text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+        # Add a data source to read files from a directory
+        data_scope["documents"] = flow_builder.add_source(
+            cocoindex.sources.LocalFile(path="markdown_files"))
+
+        # Add a collector for data to be exported to the vector index
+        doc_embeddings = data_scope.add_collector()
+
+        # Transform data of each document
+        with data_scope["documents"].row() as doc:
+            # Split the document into chunks, put into `chunks` field
+            doc["chunks"] = doc["content"].transform(
+                cocoindex.functions.SplitRecursively(),
+                language="markdown", chunk_size=2000, chunk_overlap=500)
+
+            # Transform data of each chunk
+            with doc["chunks"].row() as chunk:
+                # Embed the chunk, put into `embedding` field
+                chunk["embedding"] = chunk["text"].transform(
+                    cocoindex.functions.SentenceTransformerEmbed(
+                        model="sentence-transformers/all-MiniLM-L6-v2"))
+
+                # Collect the chunk into the collector
+                doc_embeddings.collect(
+                    filename=doc["filename"],
+                    location=chunk["location"],
+                    text=chunk["text"],
+                    embedding=chunk["embedding"])
+
+        # Export collected data to a vector index
+        doc_embeddings.export(
+            "doc_embeddings",
+            cocoindex.targets.Postgres(),
+            primary_key_fields=["filename", "location"],
+            vector_indexes=[
+                cocoindex.VectorIndexDef(
+                    field_name="embedding",
+                    metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+                )
+            ],
+        )
+    ```
+
+    Here's what each part does:
+
+    - `flow_builder.add_source` creates a table with sub-fields `filename` and `content` by reading files from the given path.
+    - `data_scope.add_collector()` creates a collector to accumulate rows for export.
+    - `SplitRecursively` splits the document `content` into chunks, producing a new `chunks` field containing a table of chunks.
+    - `SentenceTransformerEmbed` embeds each chunk's `text` field, producing an `embedding` vector.
+    - `doc_embeddings.collect(...)` gathers each chunk's fields into the collector.
+    - `doc_embeddings.export(...)` writes all collected rows to Postgres with a cosine similarity vector index on `embedding`.
+  </Step>
+
+  <Step title="Set the database URL">
+    ```bash
+    export COCOINDEX_DATABASE_URL="postgresql://cocoindex:cocoindex@localhost:5432/cocoindex"
+    ```
+
+    <Note>Make sure your Postgres server is running before proceeding.</Note>
+  </Step>
+
+  <Step title="Run the indexing pipeline">
+    ```bash
+    cocoindex update main
+    ```
+
+    CocoIndex processes all files in `markdown_files` and populates the target table. You'll see output like:
+
+    ```
+    documents: 3 added, 0 removed, 0 updated
+    ```
+
+    That's it. Your vector index is ready to query.
+  </Step>
+</Steps>
+
+## Incremental updates
+
+When you add, modify, or remove files in `markdown_files` and re-run `cocoindex update main`, CocoIndex only reprocesses the changed files — not the entire dataset.
+
+## Query the index (optional)
+
+To build an end-to-end query flow that searches the index, see the [simple_vector_index](https://cocoindex.io/examples/simple_vector_index#query-the-index) example.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" icon="book" href="/core/basics">
+    Learn flows, data scopes, collectors, and incremental processing in depth
+  </Card>
+  <Card title="Sources" icon="database" href="/sources/overview">
+    Read from S3, Google Drive, Azure Blob, Postgres, and more
+  </Card>
+  <Card title="Targets" icon="arrow-right-to-bracket" href="/targets/overview">
+    Export to Qdrant, LanceDB, Neo4j, ChromaDB, Pinecone, and more
+  </Card>
+  <Card title="Built-in functions" icon="function" href="/functions/built-in-functions">
+    SplitRecursively, SentenceTransformerEmbed, EmbedText, ExtractByLlm, and more
+  </Card>
+</CardGroup>

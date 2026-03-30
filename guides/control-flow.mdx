@@ -1,0 +1,319 @@
+---
+title: Control flow
+description: Tune concurrency controls and manage flow instances dynamically to build stable, scalable CocoIndex pipelines.
+---
+
+CocoIndex processes multiple data items in parallel to maximize throughput. Without constraints, excessive concurrency can strain memory, exhaust I/O bandwidth, or destabilize your system. CocoIndex includes built-in concurrency controls and dynamic flow management APIs to keep performance high and systems stable.
+
+## Processing concurrency
+
+### The problem with unbounded concurrency
+
+Processing too many items simultaneously can cause:
+
+- **Memory exhaustion** — large datasets loaded at once consume massive amounts of RAM.
+- **Resource contention** — CPU, disk I/O, and network bandwidth get overwhelmed by competing operations.
+- **System instability** — timeouts, degraded performance, or outright crashes.
+
+### Concurrency options
+
+CocoIndex provides two primary concurrency settings:
+
+| Option | Purpose | Unit |
+|---|---|---|
+| `max_inflight_rows` | Maximum number of rows processed concurrently. | rows |
+| `max_inflight_bytes` | Maximum memory footprint of concurrently processed data (before transformations). | bytes |
+
+When a limit is reached, CocoIndex pauses new processing until existing work completes.
+
+<Note>
+`max_inflight_bytes` measures only the size of data already in memory before transformations — it does not include temporary memory used during processing steps.
+</Note>
+
+### Where to apply concurrency controls
+
+Controls can be set at three levels. All specified constraints must be satisfied before processing proceeds.
+
+| Level | Configuration path | Applies to |
+|---|---|---|
+| Global | Environment variables or `GlobalExecutionOptions` in `cocoindex.init()` | All sources, all flows, summed together |
+| Per-source | Arguments to `FlowBuilder.add_source()` | A specific source within a flow |
+| Row iteration | Arguments to `DataSlice.row()` | Nested iterations within a flow |
+
+#### Global concurrency
+
+Global limits ensure your system never exceeds safe operating thresholds, regardless of what individual flows request.
+
+Set via environment variables:
+
+```sh
+export COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS=256
+export COCOINDEX_SOURCE_MAX_INFLIGHT_BYTES=1048576
+```
+
+Or programmatically via `cocoindex.init()`, which takes precedence over environment variables:
+
+```python
+from cocoindex import GlobalExecutionOptions
+
+cocoindex.init(
+  cocoindex.Settings(
+    ...,
+    global_execution_options = GlobalExecutionOptions(
+      source_max_inflight_rows=256,
+      source_max_inflight_bytes=1_048_576
+    )
+  )
+)
+```
+
+<Note>
+The default global `max_inflight_rows` is **1024** if not explicitly set.
+</Note>
+
+#### Per-source concurrency
+
+Set different limits per source to reflect the workload and data characteristics of each:
+
+```python
+@cocoindex.flow_def(name="DemoFlow")
+def demo_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    data_scope["documents"] = flow_builder.add_source(
+        DemoSourceSpec(...),
+        max_inflight_rows=10,
+        max_inflight_bytes=100*1024*1024  # 100 MB
+    )
+```
+
+#### Nested iteration concurrency
+
+When processing nested rows — such as processing each chunk of each document — configure limits directly on the `row()` call:
+
+```python
+with data_scope["documents"].row() as doc:
+    doc["chunks"] = doc["content"].transform(SplitRecursively(...))
+    with doc["chunks"].row(max_inflight_rows=100, max_inflight_bytes=100*1000*1000):
+        # Process up to 100 chunks in parallel per document
+        ...
+```
+
+### When to tune
+
+The default global row limit (`COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS=1024`) fits most situations: it keeps more data in memory than heavy operations can consume immediately, while preventing memory exhaustion.
+
+<AccordionGroup>
+  <Accordion title="When to decrease the limit">
+    Decrease if you observe memory overuse or timeouts on certain operations.
+  </Accordion>
+  <Accordion title="When to increase the limit">
+    Increase if the system is very stable but throughput is lower than expected.
+  </Accordion>
+  <Accordion title="When to use per-source controls">
+    Use per-source limits when you run multiple flows in the same process, or have multiple sources in the same flow, and they vary significantly in processing complexity — for example, one source runs heavy local inference while another does simple data movement.
+  </Accordion>
+  <Accordion title="When to use byte-based limits">
+    Set `max_inflight_bytes` when your input data sizes follow a long-tail distribution. A small number of abnormally large inputs can exhaust memory even when the row count is within bounds.
+  </Accordion>
+  <Accordion title="When to use nested iteration controls">
+    Set concurrency on `row()` when you have a high fanout in nested iterations and the number of nested rows varies significantly between parent rows.
+  </Accordion>
+</AccordionGroup>
+
+## Dynamic flow management
+
+You can reuse the same flow definition for multiple flow *instances* — each reading from a different source, exporting to a different target, or using different transformation parameters.
+
+### Flow instance lifecycle
+
+A flow instance has two aspects:
+
+- **In-process object** of type `cocoindex.Flow` — the handle you use to operate on it.
+- **Persistent resource** — state in internal storage and backend resources owned by the flow instance.
+
+CocoIndex provides APIs to open and close flow instances, and to set up and drop their persistent resources.
+
+| Aspect | APIs | Description |
+|---|---|---|
+| In-process object lifecycle | `open_flow()`, `Flow.close()` | Create and destroy the in-memory handle |
+| Persistent resource lifecycle | `Flow.setup()`, `Flow.drop()` | Create and destroy backend resources and internal storage |
+| Data updates | `Flow.update()`, `FlowLiveUpdater` | Execute indexing logic to update targets |
+
+### Parameterizing a flow definition
+
+The `@cocoindex.flow_def(name="...")` decorator is a shortcut for `cocoindex.open_flow()`. You can call `open_flow()` directly with a programmatically constructed name:
+
+```python
+# This decorator form:
+@cocoindex.flow_def(name="TextEmbedding")
+def text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+
+# Is equivalent to:
+def _text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    ...
+
+text_embedding_flow = cocoindex.open_flow("TextEmbedding", _text_embedding_flow)
+```
+
+To parameterize, define a dataclass for the flow's parameters and a factory function that returns a flow definition:
+
+```python
+@dataclass
+class TextEmbeddingFlowParameters:
+    source_path: str
+    target_table_name: str
+
+def text_embedding_flow_def(params: TextEmbeddingFlowParameters):
+    def _flow_def(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+        data_scope["documents"] = flow_builder.add_source(
+            cocoindex.sources.LocalFile(path=params.source_path))
+
+        doc_embeddings = data_scope.add_collector()
+        ...
+
+        doc_embeddings.export(
+            "doc_embeddings",
+            cocoindex.targets.Postgres(table_name=params.target_table_name),
+            primary_key_fields=["filename", "location"],
+        )
+
+    return _flow_def
+```
+
+### Opening flow instances dynamically
+
+Open instances on demand using a registry of parameters:
+
+```python
+FLOW_PARAMETERS: dict[str, TextEmbeddingFlowParameters] = {
+    "foo": TextEmbeddingFlowParameters(source_path="/path/to/foo", target_table_name="foo_embeddings"),
+    "bar": TextEmbeddingFlowParameters(source_path="/path/to/bar", target_table_name="bar_embeddings"),
+}
+
+def get_flow_parameters(name: str) -> TextEmbeddingFlowParameters:
+    return FLOW_PARAMETERS[name]
+```
+
+```python
+text_embedding_flows: dict[str, cocoindex.Flow] = {}
+
+def get_text_embedding_flow(name: str) -> cocoindex.Flow:
+    flow = text_embedding_flows.get(name)
+
+    if flow is None:
+        params = get_flow_parameters(name)
+        flow = text_embedding_flows[name] = cocoindex.open_flow(
+            f"TextEmbedding_{name}", text_embedding_flow_def(params))
+        flow.setup(report_to_stdout=True)
+
+    return flow
+```
+
+`setup()` synchronizes the persistent resource with the current flow definition. It is idempotent — safe to call even if the resource already exists.
+
+### Performing data updates
+
+Once the persistent resource is ready, call `update()` to run a one-time update:
+
+```python
+def update_text_embedding_index(name: str):
+    flow = get_text_embedding_flow(name)
+    flow.update()
+```
+
+For continuous updates, use `FlowLiveUpdater`. See [Live updates](/guides/live-updates).
+
+### Closing flow instances and memory-efficient caching
+
+Free the in-process object when it is no longer needed using `close()`. For a cache with automatic eviction, use `TTLCache` from [`cachetools`](https://pypi.org/project/cachetools/):
+
+```python
+from cachetools import cached, TTLCache
+
+class MyTTLCache(TTLCache):
+    def popitem(self):
+        # Close the flow instance when it is evicted from the cache
+        key, flow = super().popitem()
+        flow.close()
+        return key, flow
+
+@cached(cache=MyTTLCache(maxsize=20, ttl=600))
+def get_text_embedding_flow(name: str) -> cocoindex.Flow:
+    params = get_flow_parameters(name)
+    flow = cocoindex.open_flow(f"TextEmbedding_{name}", text_embedding_flow_def(params))
+    flow.setup(report_to_stdout=True)
+    return flow
+```
+
+Flow instances unused for 10 minutes are automatically closed.
+
+### Dropping the persistent resource
+
+Use `drop()` to remove the persistent resource for a flow. The in-process object remains usable — you can call `setup()` again if needed:
+
+```python
+def drop_text_embedding_index(name: str):
+    flow = get_text_embedding_flow(name)
+    flow.drop()
+```
+
+### Complete example
+
+```python
+import cocoindex
+from cachetools import cached, TTLCache
+from dataclasses import dataclass
+
+@dataclass
+class TextEmbeddingFlowParameters:
+    source_path: str
+    target_table_name: str
+
+FLOW_PARAMETERS: dict[str, TextEmbeddingFlowParameters] = {
+    "foo": TextEmbeddingFlowParameters(source_path="/path/to/foo", target_table_name="foo_embeddings"),
+    "bar": TextEmbeddingFlowParameters(source_path="/path/to/bar", target_table_name="bar_embeddings"),
+}
+
+def get_flow_parameters(name: str) -> TextEmbeddingFlowParameters:
+    return FLOW_PARAMETERS[name]
+
+
+def text_embedding_flow_def(params: TextEmbeddingFlowParameters):
+    def _flow_def(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+        data_scope["documents"] = flow_builder.add_source(
+            cocoindex.sources.LocalFile(path=params.source_path))
+
+        doc_embeddings = data_scope.add_collector()
+        ...
+
+        doc_embeddings.export(
+            "doc_embeddings",
+            cocoindex.targets.Postgres(table_name=params.target_table_name),
+            primary_key_fields=["filename", "location"],
+        )
+
+    return _flow_def
+
+class MyTTLCache(TTLCache):
+    def popitem(self):
+        key, flow = super().popitem()
+        flow.close()
+        return key, flow
+
+@cached(cache=MyTTLCache(maxsize=20, ttl=600))
+def get_text_embedding_flow(name: str) -> cocoindex.Flow:
+    params = get_flow_parameters(name)
+    flow = cocoindex.open_flow(f"TextEmbedding_{name}", text_embedding_flow_def(params))
+    flow.setup(report_to_stdout=True)
+    return flow
+
+def update_text_embedding_index(name: str):
+    flow = get_text_embedding_flow(name)
+    flow.update()
+
+def drop_text_embedding_index(name: str):
+    flow = get_text_embedding_flow(name)
+    flow.drop()
+```
+
+You can trigger `update_text_embedding_index()` and `drop_text_embedding_index()` from your application — for example, from a web server API endpoint.

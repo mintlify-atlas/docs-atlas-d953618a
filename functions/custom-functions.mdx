@@ -1,0 +1,189 @@
+---
+title: Custom functions
+description: Define custom transformation functions in CocoIndex using decorators, with support for caching, GPU, batching, and stateful setup.
+---
+
+CocoIndex lets you define custom functions for data transformation. You can write them in two ways:
+
+- **Standalone function** — simple, no configuration or setup logic needed.
+- **Function spec + executor** — powerful, supports configuration parameters and one-time setup (e.g. loading a model).
+
+---
+
+## Option 1: Standalone function
+
+Use this for simple cases where the function doesn't need configuration or setup logic.
+
+Decorate a regular Python function with `@cocoindex.op.function()`:
+
+```python
+@cocoindex.op.function()
+def compute_something(arg1: str, arg2: int | None = None) -> str:
+    """
+    Documentation for the function.
+    """
+    ...
+```
+
+<Note>
+  Type annotations are required on all arguments and the return value. CocoIndex uses them to determine the data types of the operation's output fields. See [Data types](/core/data-types) for supported types.
+</Note>
+
+The decorator accepts optional parameters — see [Function parameters](#function-parameters) for details.
+
+---
+
+## Option 2: Function spec and executor
+
+Use this when the function needs configuration parameters or one-time setup logic, such as loading a machine learning model.
+
+### Function spec
+
+A function spec configures the behavior of a specific function instance. When you use the function in a flow (e.g. via `transform()`), you instantiate the spec with specific parameter values.
+
+Define the spec as a class that inherits from `cocoindex.op.FunctionSpec`:
+
+```python
+class ComputeSomething(cocoindex.op.FunctionSpec):
+    """
+    Documentation for the function.
+    """
+    param1: str
+    param2: int | None = None
+```
+
+<Note>
+  All spec fields must be serializable and deserializable by the `json` module. Spec subclasses can be instantiated like dataclasses: `ComputeSomething(param1="value", param2=42)`.
+</Note>
+
+### Function executor
+
+The executor defines the function's behavior. It is instantiated once per operation that uses the function.
+
+The executor is responsible for:
+
+1. **Preparing** for execution based on the spec — runs once before any data is processed (e.g. loading a model).
+2. **Running** the function for each row of input data.
+
+Define the executor as a class decorated with `@cocoindex.op.executor_class()`:
+
+```python
+@cocoindex.op.executor_class()
+class ComputeSomethingExecutor:
+    spec: ComputeSomething
+
+    def prepare(self) -> None:
+        # One-time setup — called once before __call__ is ever invoked.
+        ...
+
+    def __call__(self, arg1: str, arg2: int | None = None) -> str:
+        # Called once per row of input data.
+        ...
+```
+
+<Note>
+  - A `spec` field must be present and annotated with the spec class name.
+  - `prepare()` is optional. It runs exactly once before any `__call__` invocations.
+  - `__call__()` is required. Type annotations on arguments and the return value are required.
+</Note>
+
+---
+
+## Function parameters
+
+Both `@cocoindex.op.function()` and `@cocoindex.op.executor_class()` accept these optional parameters:
+
+<ParamField path="gpu" type="bool" default="false">
+  Whether the executor uses GPU. This affects how the function is scheduled.
+</ParamField>
+
+<ParamField path="cache" type="bool" default="false">
+  Whether to cache function results for reuse during reprocessing. Set to `True` for computationally intensive functions. Requires `behavior_version` to be set.
+</ParamField>
+
+<ParamField path="behavior_version" type="int">
+  The version of the function's behavior. When changed, cached results are invalidated and the function re-executes. Required when `cache` is `True`.
+</ParamField>
+
+<ParamField path="batching" type="bool" default="false">
+  Whether the function processes requests in batches. See [Batching](#batching) for details.
+</ParamField>
+
+<ParamField path="max_batch_size" type="int | None">
+  Maximum batch size. Only valid when `batching` is `True`.
+</ParamField>
+
+<ParamField path="timeout" type="datetime.timedelta | None">
+  Timeout for function execution. `None` uses the default (1800 seconds).
+</ParamField>
+
+<ParamField path="arg_relationship" type="tuple[ArgRelationship, str]">
+  Specifies the relationship between an input argument and the output. Used to provide metadata for tools such as CocoInsight.
+
+  Supported values:
+  - `ArgRelationship.CHUNKS_BASE_TEXT` — the output is chunks of the text in the named argument. Output must be a `Table` whose first column is `Range`.
+  - `ArgRelationship.EMBEDDING_ORIGIN_TEXT` — the output is an embedding of the text in the named argument. Output must be a `Vector`.
+  - `ArgRelationship.RECTS_BASE_IMAGE` — the output is rectangles for the image in the named argument. Output must be a `Table` whose first column is a `Struct` with `min_x`, `min_y`, `max_x`, `max_y`.
+</ParamField>
+
+### Examples
+
+```python
+# Enable cache for a standalone function
+@cocoindex.op.function(cache=True, behavior_version=1)
+def compute_something(arg1: str, arg2: int | None = None) -> str:
+    ...
+```
+
+```python
+# Enable cache for a spec-and-executor function
+class ComputeSomething(cocoindex.op.FunctionSpec):
+    ...
+
+@cocoindex.op.executor_class(cache=True, behavior_version=1)
+class ComputeSomethingExecutor:
+    spec: ComputeSomething
+    ...
+```
+
+---
+
+## Batching
+
+Batching allows a function to process multiple inputs at once, which is more efficient for GPU inference or rate-limited APIs.
+
+Enable batching by setting `batching=True`. When batching is enabled, the argument and return type must be `list`. Only single-argument functions are currently supported for batching.
+
+```python
+# Standalone batching function
+@cocoindex.op.function(batching=True)
+def compute_something(args: list[str]) -> list[str]:
+    ...
+```
+
+```python
+# Executor-based batching function
+@cocoindex.op.executor_class(batching=True)
+class ComputeSomethingExecutor:
+    spec: ComputeSomething
+
+    def __call__(self, args: list[str]) -> list[str]:
+        ...
+```
+
+### Controlling batch size
+
+Use `max_batch_size` to limit how many items are processed in a single batch — useful for controlling memory usage, reducing latency, or complying with API request size limits.
+
+```python
+@cocoindex.op.function(batching=True, max_batch_size=32)
+def compute_something(args: list[str]) -> list[str]:
+    ...
+```
+
+A batch is flushed when either:
+
+1. No other batches are currently running, or
+2. The pending batch size reaches `max_batch_size`.
+
+This ensures requests don't wait indefinitely for a batch to fill up while still enabling efficient batch processing.

@@ -1,0 +1,134 @@
+---
+title: "ChromaDB"
+description: "Export data to a ChromaDB collection with single-embedding vector search."
+---
+
+The `coco_chromadb.ChromaDB` target exports data to a [ChromaDB](https://www.trychroma.com/) collection. Each export target maps to a unique collection.
+
+| CocoIndex element | ChromaDB element |
+|---|---|
+| An export target | A unique collection |
+| A collected row | A document |
+| The vector field | The embedding |
+| The field named by `document_field` | Document content |
+| Other fields | Metadata key-value pairs |
+
+ChromaDB supports exactly one embedding per document. Exactly one vector field must be present in the value schema — it becomes the embedding. Non-vector fields become metadata, except the field named by `document_field` (if set), which is stored as ChromaDB's document content and enables its built-in text search.
+
+Complex metadata values (lists, dicts, etc.) are automatically JSON-serialized.
+
+<Info>
+  ChromaDB is provided as an optional dependency. Install it before use:
+
+  ```sh
+  pip install "cocoindex[chromadb]"
+  ```
+
+  Then import the submodule in your flow:
+
+  ```python
+  import cocoindex.targets.chromadb as coco_chromadb
+  ```
+</Info>
+
+## Spec
+
+`coco_chromadb.ChromaDB`
+
+### Collection
+
+<ParamField path="collection_name" type="string" required>
+  Name of the ChromaDB collection to export data to.
+</ParamField>
+
+<ParamField path="document_field" type="string">
+  Name of the value field to pass as ChromaDB's `documents` parameter. This field is stored as document content rather than metadata, enabling ChromaDB's built-in text search on that field.
+</ParamField>
+
+### Client
+
+<ParamField path="client_type" type="ClientType" default="PERSISTENT">
+  Which ChromaDB client to use:
+
+  - `PERSISTENT` — local on-disk storage via `PersistentClient`.
+  - `HTTP` — connects to a remote ChromaDB server via `HttpClient`.
+  - `CLOUD` — connects to [Chroma Cloud](https://www.trychroma.com/) via `CloudClient`.
+</ParamField>
+
+<ParamField path="path" type="string" default="./chromadb_data">
+  Data directory for local storage. Used with the `PERSISTENT` client.
+</ParamField>
+
+<ParamField path="host" type="string" default="localhost">
+  Server hostname. Used with the `HTTP` client.
+</ParamField>
+
+<ParamField path="port" type="integer" default="8000">
+  Server port. Used with the `HTTP` client.
+</ParamField>
+
+<ParamField path="ssl" type="boolean" default="false">
+  Whether to use SSL. Used with the `HTTP` client.
+</ParamField>
+
+<ParamField path="api_key" type="string">
+  API key for authentication. Required when using the `CLOUD` client.
+</ParamField>
+
+<ParamField path="tenant" type="string">
+  Chroma tenant. Defaults to ChromaDB's default tenant.
+</ParamField>
+
+<ParamField path="database" type="string">
+  Chroma database. Defaults to ChromaDB's default database.
+</ParamField>
+
+### HNSW index
+
+<ParamField path="hnsw_config" type="HnswConfig">
+  HNSW index tuning parameters. `HnswConfig` has the following optional fields:
+
+  - `m` (`int`): Number of bidirectional links per element.
+  - `ef_construction` (`int`): Size of the dynamic candidate list during index construction.
+  - `ef_search` (`int`): Size of the dynamic candidate list during search.
+</ParamField>
+
+## Notes
+
+- Exactly **one primary key field** is required.
+- Exactly **one vector field** is required — ChromaDB stores a single embedding per document.
+- Supported distance metrics: `COSINE_SIMILARITY`, `L2_DISTANCE`, `INNER_PRODUCT`.
+
+## Example
+
+```python
+import cocoindex
+import cocoindex.targets.chromadb as coco_chromadb
+
+@cocoindex.flow_def(name="TextEmbeddingWithChromaDB")
+def text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    # ... source and transformations ...
+
+    doc_embeddings = data_scope.add_collector()
+    # ... collect fields: id, filename, text, text_embedding ...
+
+    doc_embeddings.export(
+        "doc_embeddings",
+        coco_chromadb.ChromaDB(
+            collection_name="text_embedding",
+            path="./chromadb_data",
+            document_field="text",
+        ),
+        primary_key_fields=["id"],
+        vector_indexes=[
+            cocoindex.VectorIndexDef(
+                field_name="text_embedding",
+                metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+            )
+        ],
+    )
+```
+
+<Tip>
+  See the [Text Embedding ChromaDB Example](https://github.com/cocoindex-io/cocoindex/tree/main/examples/text_embedding_chromadb) for a complete end-to-end flow.
+</Tip>

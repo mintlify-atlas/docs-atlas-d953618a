@@ -1,0 +1,88 @@
+---
+title: Installation
+description: Set up CocoIndex in your environment.
+---
+
+## System requirements
+
+CocoIndex is supported on the following operating systems:
+
+- **macOS**: 10.12+ on x86_64, 11.0+ on arm64
+- **Linux**: x86_64 or arm64, glibc 2.28+ (Debian 10+, Ubuntu 18.10+, Fedora 29+, CentOS/RHEL 8+)
+- **Windows**: 10+ on x86_64
+
+Python 3.11 to 3.13 is required.
+
+## Setup
+
+<Steps>
+  <Step title="Install Python and pip">
+    Install [Python](https://wiki.python.org/moin/BeginnersGuide/Download) (3.11–3.13) and [pip](https://pip.pypa.io/en/stable/installation/).
+  </Step>
+
+  <Step title="Install CocoIndex">
+    ```bash
+    pip install -U cocoindex
+    ```
+
+    ### Optional extras
+
+    Install additional extras depending on what you need:
+
+    | Extra | Installs | Install command |
+    |---|---|---|
+    | `embeddings` | `sentence-transformers` | `pip install 'cocoindex[embeddings]'` |
+    | `colpali` | `colpali-engine` | `pip install 'cocoindex[colpali]'` |
+    | `lancedb` | `lancedb`, `pyarrow` | `pip install 'cocoindex[lancedb]'` |
+    | `chromadb` | `chromadb` | `pip install 'cocoindex[chromadb]'` |
+    | `doris` | `aiohttp`, `aiomysql`, `pymysql` | `pip install 'cocoindex[doris]'` |
+    | `all` | All of the above | `pip install 'cocoindex[all]'` |
+
+    <Tip>For the quickstart tutorial, install the `embeddings` extra: `pip install 'cocoindex[embeddings]'`</Tip>
+  </Step>
+
+  <Step title="Install Postgres">
+    CocoIndex requires a Postgres database with the [pgvector](https://github.com/pgvector/pgvector) extension for internal state and vector storage.
+
+    Skip this step if you already have a Postgres database with pgvector installed.
+
+    If you don't have one, install [Docker Compose](https://docs.docker.com/compose/install/) and run:
+
+    ```bash
+    docker compose -f <(curl -L https://raw.githubusercontent.com/cocoindex-io/cocoindex/refs/heads/main/dev/postgres.yaml) up -d
+    ```
+
+    This starts a Postgres instance pre-configured for CocoIndex.
+  </Step>
+
+  <Step title="Configure the database URL">
+    Set the `COCOINDEX_DATABASE_URL` environment variable so CocoIndex can connect to your Postgres instance:
+
+    ```bash
+    export COCOINDEX_DATABASE_URL="postgresql://cocoindex:cocoindex@localhost:5432/cocoindex"
+    ```
+
+    <Note>If you used the Docker Compose setup above, the connection string above matches the default credentials.</Note>
+  </Step>
+</Steps>
+
+## Verify your installation
+
+Run the following to confirm CocoIndex is installed:
+
+```bash
+cocoindex --help
+```
+
+You should see the CocoIndex CLI help output.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Build a text embedding index end to end
+  </Card>
+  <Card title="Core concepts" icon="book" href="/core/basics">
+    Learn flows, data scopes, and incremental processing
+  </Card>
+</CardGroup>

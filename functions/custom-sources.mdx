@@ -1,0 +1,254 @@
+---
+title: Custom sources
+description: Build custom data sources in CocoIndex to read from any system — APIs, databases, file systems, or external services.
+---
+
+A custom source lets you read data from any system — APIs, databases, file systems, cloud storage, or other external services. You can stream data incrementally and provide ordinal information for efficient change tracking.
+
+## Overview
+
+A custom source is defined by two components:
+
+- A **source spec** — configures the connection parameters for the source.
+- A **source connector** — handles the actual data reading operations.
+
+The connector must implement three required methods:
+
+| Method | Description |
+|--------|-------------|
+| `create()` | Create a connector instance from the source spec. |
+| `list()` | List all available data items and return their keys. |
+| `get_value()` | Get the full content for a specific data item by key. |
+
+---
+
+## Source spec
+
+The source spec defines configuration parameters for your custom source. When you use the source in a flow via [`add_source()`](/core/flow-definition#import-from-source), you instantiate the spec with specific values.
+
+Define the spec as a class that inherits from `cocoindex.op.SourceSpec`:
+
+```python
+class CustomSource(cocoindex.op.SourceSpec):
+    """
+    Documentation for the source.
+    """
+    param1: str
+    param2: int | None = None
+```
+
+<Note>
+  All spec fields must be serializable and deserializable by the `json` module. Spec subclasses can be instantiated like dataclasses: `CustomSource(param1="value")`.
+</Note>
+
+---
+
+## Source connector
+
+The source connector handles data reading. Define it as a class decorated with `@cocoindex.op.source_connector()`:
+
+```python
+@cocoindex.op.source_connector(
+    spec_cls=CustomSource,
+    key_type=DataKeyType,
+    value_type=DataValueType
+)
+class CustomSourceConnector:
+    @staticmethod
+    async def create(spec: CustomSource) -> "CustomSourceConnector":
+        """Required. Create a connector instance from the spec."""
+        ...
+
+    async def list(self, options: SourceReadOptions) -> AsyncIterator[PartialSourceRow[DataKeyType, DataValueType]]:
+        """Required. List all available data items."""
+        ...
+
+    async def get_value(self, key: DataKeyType, options: SourceReadOptions) -> PartialSourceRowData[DataValueType]:
+        """Required. Get the full content for a specific data item."""
+        ...
+
+    def provides_ordinal(self) -> bool:
+        """Optional. Return True if this source provides ordinal information."""
+        return False
+```
+
+<Note>
+  - The `options` argument is optional in `list()` and `get_value()`. Without it, provide all available fields.
+  - `provides_ordinal()` is optional.
+  - `create()`, `list()`, and `get_value()` can be async or sync.
+</Note>
+
+---
+
+## Methods
+
+### `create(spec)` (Required)
+
+Creates a connector instance from the source spec. Use this to initialize connections, validate configuration, or authenticate.
+
+```python
+@staticmethod
+async def create(spec: CustomSource) -> "CustomSourceConnector":
+    # Initialize connections, authenticate, etc.
+    return CustomSourceConnector(spec, ...)
+```
+
+### `list(options?)` (Required)
+
+Enumerates all available data items. Yields `PartialSourceRow` objects with a `key` and optional metadata. CocoIndex uses this to discover available data and track changes.
+
+```python
+async def list(self, options: SourceReadOptions) -> AsyncIterator[PartialSourceRow[DataKeyType, DataValueType]]:
+    for item_metadata in await self._fetch_item_list():
+        data = PartialSourceRowData[DataValueType]()
+
+        # Include ordinal if requested and available.
+        # Required when provides_ordinal() returns True and include_ordinal is True.
+        if options.include_ordinal and item_metadata.timestamp:
+            data.ordinal = item_metadata.timestamp
+
+        # Optionally include full value if it's cheap to fetch
+        if options.include_value and self._can_fetch_cheaply(item_metadata):
+            data.value = await self._fetch_item_content(item_metadata.id)
+
+        yield PartialSourceRow(
+            key=DataKeyType(id=item_metadata.id),
+            data=data
+        )
+```
+
+### `get_value(key, options?)` (Required)
+
+Retrieves the full content for a specific data item. Returns a `PartialSourceRowData` object with the actual data.
+
+```python
+async def get_value(self, key: DataKeyType, options: SourceReadOptions) -> PartialSourceRowData[DataValueType]:
+    content = await self._fetch_item_content(key.id)
+    if content is None:
+        return PartialSourceRowData(
+            value=NON_EXISTENCE,
+            ordinal=NO_ORDINAL,
+            content_version_fp=None
+        )
+
+    data = PartialSourceRowData(
+        value=DataValueType(
+            title=content.title,
+            content=content.body,
+            author=content.author
+        )
+    )
+
+    if options.include_ordinal and content.timestamp:
+        data.ordinal = content.timestamp
+
+    if options.include_content_version_fp and content.etag:
+        data.content_version_fp = content.etag.encode()
+
+    return data
+```
+
+### `provides_ordinal()` (Optional)
+
+Returns `True` if the source provides ordinal information (e.g. timestamps or version numbers). When `True`, CocoIndex can use this information to optimize incremental updates.
+
+```python
+def provides_ordinal(self) -> bool:
+    return True  # if your source provides timestamps or version numbers
+```
+
+---
+
+## Data types
+
+### SourceReadOptions
+
+Provides hints to the connector about what information is currently needed, allowing it to optimize data fetching.
+
+```python
+@dataclasses.dataclass
+class SourceReadOptions:
+    include_ordinal: bool = False
+    include_content_version_fp: bool = False
+    include_value: bool = False
+```
+
+<ParamField path="include_ordinal" type="bool" default="false">
+  Whether to include ordinal information (timestamps, version numbers). When `provides_ordinal()` returns `True`, you must provide `ordinal` in `list()` when this is `True`.
+</ParamField>
+
+<ParamField path="include_content_version_fp" type="bool" default="false">
+  Whether to include content version fingerprints for change detection. Always optional — only provide if you can obtain it without computing a hash on the full content.
+</ParamField>
+
+<ParamField path="include_value" type="bool" default="false">
+  Whether to include full values. Required in `get_value()` when `True`. Optional in `list()` — useful when fetching is significantly cheaper than calling `get_value()` per item.
+</ParamField>
+
+### PartialSourceRow
+
+Represents a single data item from the source.
+
+```python
+@dataclasses.dataclass
+class PartialSourceRow(Generic[K, V]):
+    key: K                          # Unique identifier for the data item
+    data: PartialSourceRowData[V]   # Metadata and optionally the value
+```
+
+### PartialSourceRowData
+
+Contains the data and metadata for a source item.
+
+```python
+@dataclasses.dataclass
+class PartialSourceRowData(Generic[V]):
+    value: V | Literal["NON_EXISTENCE"] | None = None
+    ordinal: int | Literal["NO_ORDINAL"] | None = None
+    content_version_fp: bytes | None = None
+```
+
+<ParamField path="value" type="V | NON_EXISTENCE | None">
+  The actual data content. Use `cocoindex.op.NON_EXISTENCE` if the item doesn't exist. `None` means not included.
+</ParamField>
+
+<ParamField path="ordinal" type="int | NO_ORDINAL | None">
+  Timestamp or version number for change tracking. Must be monotonically increasing. Use `cocoindex.op.NO_ORDINAL` if not available. `None` means not included.
+</ParamField>
+
+<ParamField path="content_version_fp" type="bytes | None">
+  Content fingerprint (hash, ETag, etc.) for efficient change detection. `None` if not available.
+</ParamField>
+
+### Key type and value type
+
+The data type of a custom source is a [KTable](/core/data-types#ktable), so the key and value types follow KTable requirements.
+
+**Key type** — uniquely identifies each data item:
+
+```python
+# Multi-field key using NamedTuple
+class DataKeyType(NamedTuple):
+    id: str
+    category: str | None = None
+
+# For a single key field, you can use a simple type like str or int.
+# The key field name will be cocoindex.KEY_FIELD_NAME in that case.
+```
+
+**Value type** — represents the actual data content:
+
+```python
+@dataclasses.dataclass
+class DataValueType:
+    title: str
+    content: str
+    author: str | None
+    created_at: datetime | None
+```
+
+---
+
+## Example
+
+See the [custom_source_hn](https://github.com/cocoindex-io/cocoindex/blob/main/examples/custom_source_hn/main.py) example for a complete end-to-end implementation using the Hacker News API.

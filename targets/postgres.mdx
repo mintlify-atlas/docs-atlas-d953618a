@@ -1,0 +1,107 @@
+---
+title: "Postgres"
+description: "Export data to Postgres with vector search via the pgvector extension."
+---
+
+The `cocoindex.targets.Postgres` target exports data to a Postgres database table. Each export target maps to a unique table: one collector, one table.
+
+| CocoIndex element | Postgres element |
+|---|---|
+| An export target | A unique table |
+| A collected row | A row |
+| A field | A column |
+
+<Warning>
+  Vectors in pgvector must have a fixed dimension. CocoIndex only maps vectors with a fixed element type and dimension — `Vector[Float32, N]`, `Vector[Float64, N]`, and `Vector[Int64, N]` — to `vector(N)` columns. All other vector types are mapped to `jsonb` columns.
+</Warning>
+
+<Note>
+  Postgres cannot store `U+0000` (NUL) characters in text or `jsonb` columns. CocoIndex automatically strips NUL characters from strings before export. For example, `"Hello\0World"` becomes `"HelloWorld"`.
+</Note>
+
+## Spec
+
+`cocoindex.targets.Postgres`
+
+<ParamField path="database" type="AuthEntryReference[DatabaseConnectionSpec]">
+  Auth reference to the Postgres connection. See [DatabaseConnectionSpec](/core/settings#databaseconnectionspec) for its fields.
+
+  If not provided, CocoIndex uses the same database as its [internal storage](/core/basics#internal-storage).
+</ParamField>
+
+<ParamField path="table_name" type="string">
+  Name of the table to write to.
+
+  If not specified, CocoIndex generates a name using the pattern `[AppNamespace__]FlowName__TargetName`, for example `DemoFlow__doc_embeddings` or `Staging__DemoFlow__doc_embeddings`.
+</ParamField>
+
+<ParamField path="schema" type="string">
+  PostgreSQL schema to create the table in. Defaults to the database's default schema (usually `public`).
+
+  When specified, `table_name` must also be explicitly set. CocoIndex creates the schema automatically if it does not exist.
+</ParamField>
+
+<ParamField path="column_options" type="dict[str, PostgresColumnOptions]">
+  Per-column options. The key is the column name; the value is a `PostgresColumnOptions` object with the following field:
+
+  - `type` (`"vector"` | `"halfvec"`, optional): Override the Postgres column type for a vector column. Defaults to `"vector"`. Set to `"halfvec"` to use half-precision storage.
+</ParamField>
+
+## Attachments
+
+### PostgresSqlCommand
+
+Execute arbitrary SQL during flow setup. Useful for creating specialized indexes, triggers, or grants that are not natively modeled by the target spec.
+
+<ParamField path="name" type="string" required>
+  Identifier for this attachment on the target. Must be unique within the target.
+</ParamField>
+
+<ParamField path="setup_sql" type="string" required>
+  SQL to execute during setup. Multiple statements are allowed; separate them with `;`. Must be idempotent (use `CREATE ... IF NOT EXISTS`). If you update this field, the new SQL runs on the next setup.
+</ParamField>
+
+<ParamField path="teardown_sql" type="string">
+  SQL to execute when the attachment or target is removed. Must be idempotent (use `DROP ... IF EXISTS`). CocoIndex saves this value and executes it on teardown, so updates take effect on the next teardown.
+</ParamField>
+
+## Example
+
+Export document embeddings to Postgres with a vector index and a custom full-text search index:
+
+```python
+import cocoindex
+
+@cocoindex.flow_def(name="TextEmbeddingFlow")
+def text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    # ... source and transformations ...
+
+    doc_embeddings = data_scope.add_collector()
+    # ... collect fields: id, filename, text, embedding ...
+
+    doc_embeddings.export(
+        "doc_embeddings",
+        cocoindex.targets.Postgres(table_name="doc_embeddings"),
+        primary_key_fields=["id"],
+        vector_indexes=[
+            cocoindex.VectorIndexDef(
+                field_name="embedding",
+                metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+            )
+        ],
+        attachments=[
+            cocoindex.targets.PostgresSqlCommand(
+                name="fts",
+                setup_sql=(
+                    "CREATE INDEX IF NOT EXISTS doc_embeddings_text_fts "
+                    "ON doc_embeddings USING GIN (to_tsvector('english', text));"
+                ),
+                teardown_sql="DROP INDEX IF EXISTS doc_embeddings_text_fts;",
+            )
+        ],
+    )
+```
+
+<Tip>
+  See the [Text Embedding Example](https://github.com/cocoindex-io/cocoindex/tree/main/examples/text_embedding) for a complete end-to-end flow using Postgres.
+</Tip>

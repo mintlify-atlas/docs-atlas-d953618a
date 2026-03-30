@@ -1,97 +1,116 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "CocoIndex — Data Transformation for AI"
+description: "Ultra-performant data transformation framework for AI with incremental processing. Build vector indexes, knowledge graphs, and custom pipelines from any data source."
 ---
 
-## Setting up
+CocoIndex is an ultra-performant data transformation framework for AI, with its core engine written in Rust. It transforms data from any source into vector indexes, knowledge graphs, or custom formats — and keeps them automatically up to date as your source data changes.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Build your first vector index in under 10 minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Core Concepts" icon="book" href="/core/basics">
+    Understand flows, data scopes, and incremental processing
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Sources" icon="database" href="/sources/overview">
+    Connect to local files, S3, Google Drive, Postgres, and more
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Targets" icon="arrow-right-to-bracket" href="/targets/overview">
+    Export to Postgres, Qdrant, LanceDB, Neo4j, ChromaDB, and more
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why CocoIndex?
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Incremental processing" icon="arrows-rotate">
+    Only recomputes what changed. Minimal work on every source update — no full reindexing.
+  </Card>
+  <Card title="Rust-powered performance" icon="bolt">
+    Core engine written in Rust with Python bindings via PyO3. Production-ready from day one.
+  </Card>
+  <Card title="Dataflow programming model" icon="diagram-project">
+    Declare transformations declaratively. Data lineage is observable out of the box.
+  </Card>
+  <Card title="Plug-and-play integrations" icon="plug">
+    One-line switching between sources and targets. Built-in LLM support for embeddings and extraction.
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get started in minutes
 
-## Need inspiration?
+<Steps>
+  <Step title="Install CocoIndex">
+    ```bash
+    pip install -U cocoindex
+    ```
+  </Step>
+  <Step title="Define your indexing flow">
+    ```python
+    import cocoindex
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+    @cocoindex.flow_def(name="TextEmbedding")
+    def text_embedding_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+        data_scope["documents"] = flow_builder.add_source(
+            cocoindex.sources.LocalFile(path="markdown_files"))
+
+        doc_embeddings = data_scope.add_collector()
+
+        with data_scope["documents"].row() as doc:
+            doc["chunks"] = doc["content"].transform(
+                cocoindex.functions.SplitRecursively(),
+                language="markdown", chunk_size=2000, chunk_overlap=500)
+
+            with doc["chunks"].row() as chunk:
+                chunk["embedding"] = chunk["text"].transform(
+                    cocoindex.functions.SentenceTransformerEmbed(
+                        model="sentence-transformers/all-MiniLM-L6-v2"))
+
+                doc_embeddings.collect(filename=doc["filename"],
+                                       location=chunk["location"],
+                                       text=chunk["text"],
+                                       embedding=chunk["embedding"])
+
+        doc_embeddings.export(
+            "doc_embeddings",
+            cocoindex.targets.Postgres(),
+            primary_key_fields=["filename", "location"],
+            vector_indexes=[
+                cocoindex.VectorIndexDef(
+                    field_name="embedding",
+                    metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY)])
+    ```
+  </Step>
+  <Step title="Run the indexing pipeline">
+    ```bash
+    export COCOINDEX_DATABASE_URL="postgresql://user:pass@localhost/cocoindex"
+    cocoindex update main
+    ```
+  </Step>
+  <Step title="Keep your index fresh">
+    Switch to live update mode with `cocoindex update main -L` to continuously react to source data changes.
+  </Step>
+</Steps>
+
+## Explore more
+
+<CardGroup cols={3}>
+  <Card title="Built-in functions" icon="function" href="/functions/built-in-functions">
+    SplitRecursively, SentenceTransformerEmbed, EmbedText, ExtractByLlm, and more
+  </Card>
+  <Card title="LLM integration" icon="brain" href="/functions/llm-integration">
+    OpenAI, Anthropic, Gemini, Ollama, and 8+ more LLM APIs
+  </Card>
+  <Card title="Custom operations" icon="code" href="/functions/custom-functions">
+    Build your own sources, functions, and targets
+  </Card>
+  <Card title="Live updates" icon="signal" href="/guides/live-updates">
+    Keep indexes continuously fresh with change-data-capture
+  </Card>
+  <Card title="Query support" icon="magnifying-glass" href="/guides/querying">
+    Integrate querying with your indexing flows
+  </Card>
+  <Card title="CLI reference" icon="terminal" href="/core/cli">
+    Manage and inspect flows from the command line
+  </Card>
+</CardGroup>

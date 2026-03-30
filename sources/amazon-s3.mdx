@@ -1,0 +1,192 @@
+---
+title: "Amazon S3"
+description: "Import files from an Amazon S3 bucket into a CocoIndex indexing flow."
+---
+
+The `AmazonS3` source imports files from an Amazon S3 bucket. It supports prefix filtering, glob patterns, file size limits, and change event notifications via SQS or Redis (for MinIO).
+
+## Setup
+
+### AWS account
+
+<Steps>
+  <Step title="Create or log in to an AWS account">
+    Sign up or log in at [aws.amazon.com](https://aws.amazon.com/).
+  </Step>
+  <Step title="Create an IAM user">
+    AWS recommends using [IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html) rather than root accounts for programmatic access. Create one in the [AWS IAM Console](https://console.aws.amazon.com/iam/home).
+  </Step>
+  <Step title="Attach permissions">
+    Attach the following permission policies to your IAM user:
+
+    - `AmazonS3ReadOnlyAccess` — required for reading S3 objects.
+    - `AmazonSQSFullAccess` — required if you want SQS-based change event notifications. `AmazonSQSReadOnlyAccess` is not sufficient because processed messages must be deleted from the queue.
+  </Step>
+</Steps>
+
+### AWS credentials
+
+Configure the AWS SDK credentials by running:
+
+```sh
+aws configure
+```
+
+This creates `~/.aws/credentials` and `~/.aws/config`. For advanced configuration, see the [AWS CLI configuration docs](https://docs.aws.amazon.com/cli/v1/userguide/cli-configure-files.html).
+
+### Create an S3 bucket
+
+Create an S3 bucket in the [Amazon S3 Console](https://s3.console.aws.amazon.com/s3/home) or using the AWS CLI:
+
+```sh
+aws s3 mb s3://your-bucket-name
+aws s3 cp ./your-files/ s3://your-bucket-name/ --recursive
+```
+
+### (Optional) Set up SQS for change event notifications
+
+To trigger reprocessing on file creation, update, or deletion, configure an SQS queue:
+
+<Steps>
+  <Step title="Create an SQS queue">
+    In the [Amazon SQS Console](https://console.aws.amazon.com/sqs/home), create a queue. Add an access policy that allows S3 to send messages to it:
+
+    ```json
+    {
+      "Statement": [
+        {
+          "Sid": "__publish_statement",
+          "Effect": "Allow",
+          "Principal": {
+            "Service": "s3.amazonaws.com"
+          },
+          "Resource": "${SQS_QUEUE_ARN}",
+          "Action": "SQS:SendMessage",
+          "Condition": {
+            "ArnLike": {
+              "aws:SourceArn": "${S3_BUCKET_ARN}"
+            }
+          }
+        }
+      ]
+    }
+    ```
+
+    Replace `${SQS_QUEUE_ARN}` and `${S3_BUCKET_ARN}` with your actual ARNs.
+  </Step>
+  <Step title="Configure S3 event notifications">
+    In the S3 Console, open your bucket. Under the **Properties** tab, click **Create event notification**:
+
+    - Set an event name (e.g. `S3ChangeNotifications`).
+    - If your source uses a prefix, set the same prefix here.
+    - Select event types: **All object create events** and **All object removal events**.
+    - Set the destination to your SQS queue.
+  </Step>
+</Steps>
+
+<Note>
+  CocoIndex deletes SQS messages after processing them. Unrelated messages (such as test messages from SQS or messages for excluded files) are also deleted to prevent repeated redelivery.
+</Note>
+
+Use a dedicated SQS queue for each `AmazonS3` data source.
+
+### (Alternative) Set up Redis for change notifications (MinIO)
+
+For MinIO setups, you can publish events to Redis instead of SQS:
+
+```sh
+export MINIO_NOTIFY_REDIS_ENABLE="on"
+export MINIO_NOTIFY_REDIS_ADDRESS="redis-endpoint.example.net:6379"
+export MINIO_NOTIFY_REDIS_KEY="bucketevents"
+export MINIO_NOTIFY_REDIS_FORMAT="namespace"
+```
+
+Or use the `mc` CLI tool:
+
+```sh
+mc alias set myminio http://minio.example.com:9000 ACCESSKEY SECRETKEY
+mc admin config set myminio/ notify_redis \
+  address="redis-endpoint.example.net:6379" \
+  key="bucketevents" \
+  format="namespace"
+mc admin service restart myminio
+```
+
+See the [MinIO Redis Notification Settings](https://min.io/docs/minio/linux/reference/minio-server/settings/notifications/redis.html) for more details.
+
+## Spec
+
+**Class:** `cocoindex.sources.AmazonS3`
+
+<ParamField path="bucket_name" type="string" required>
+  The Amazon S3 bucket name.
+</ParamField>
+
+<ParamField path="prefix" type="string">
+  When provided, only files with a path starting with this prefix are imported.
+</ParamField>
+
+<ParamField path="binary" type="boolean" default="false">
+  When `True`, files are read as binary (`Bytes`). When `False` (default), files are read as UTF-8 text (`Str`).
+</ParamField>
+
+<ParamField path="included_patterns" type="string[]">
+  A list of Unix-style glob patterns to include files, e.g. `["*.txt", "docs/**/*.md"]`. If not specified, all files are included.
+
+  <Info>
+    Patterns use the globset syntax. See the [globset documentation](https://docs.rs/globset/latest/globset/index.html#syntax) for details.
+  </Info>
+</ParamField>
+
+<ParamField path="excluded_patterns" type="string[]">
+  A list of Unix-style glob patterns to exclude files, e.g. `["*.tmp", "**/*.log"]`. Files matching these patterns are excluded even if they also match `included_patterns`. If not specified, no files are excluded.
+</ParamField>
+
+<ParamField path="max_file_size" type="integer">
+  Maximum file size in bytes. Files exceeding this limit are treated as non-existent and skipped. If not specified, no size limit is applied.
+</ParamField>
+
+<ParamField path="sqs_queue_url" type="string">
+  When provided, the source receives change event notifications from S3 via this SQS queue URL. Use this to trigger incremental reprocessing on object creation, update, or deletion.
+</ParamField>
+
+<ParamField path="redis_url" type="string">
+  When provided, the source receives change event notifications via Redis pub/sub. Intended for MinIO setups that publish events to Redis.
+</ParamField>
+
+<ParamField path="redis_channel" type="string">
+  The Redis channel to subscribe to for event notifications. Required when `redis_url` is provided.
+
+  <Info>
+    Redis pub/sub takes priority over SQS when both are configured. The Redis implementation expects S3 event notifications in the same JSON format as SQS messages.
+  </Info>
+</ParamField>
+
+<ParamField path="force_path_style" type="boolean" default="false">
+  When `True`, forces path-style URLs for S3 requests. Useful for MinIO and other S3-compatible services.
+</ParamField>
+
+## Output schema
+
+The source produces a [KTable](/core/data-types) with the following fields:
+
+| Field | Type | Role | Description |
+|---|---|---|---|
+| `filename` | `Str` | Key | File path relative to the bucket root (or prefix), e.g. `"dir1/file1.md"` |
+| `content` | `Str` or `Bytes` | Value | File content. `Str` when `binary` is `False`, `Bytes` when `True` |
+
+## Example
+
+```python
+import cocoindex
+
+data_scope["documents"] = flow_builder.add_source(
+    cocoindex.sources.AmazonS3(
+        bucket_name="my-documents-bucket",
+        prefix="docs/",
+        included_patterns=["**/*.md", "**/*.txt"],
+        excluded_patterns=["**/*.log"],
+        sqs_queue_url="https://sqs.us-east-1.amazonaws.com/123456789/my-queue",
+    )
+)
+```

@@ -1,0 +1,178 @@
+---
+title: "Settings"
+description: "Configure CocoIndex settings: database connection, app namespace, and global execution options."
+---
+
+Certain settings need to be provided for CocoIndex to work, such as database connections, app namespace, and execution options.
+
+CocoIndex exposes process-level settings specified by the `cocoindex.Settings` dataclass. Settings can be configured in three different ways — later methods override earlier ones.
+
+## Configuration methods
+
+<Steps>
+  <Step title="Environment variables">
+    The simplest approach. Set the corresponding environment variables listed in the [table below](#list-of-environment-variables).
+
+    <Tip>
+      Place a `.env` file in your directory. The [CLI](/core/cli#environment-variables) will load environment variables from it automatically. From your own main module, you can also load them using a package like [`python-dotenv`](https://github.com/theskumar/python-dotenv).
+    </Tip>
+  </Step>
+  <Step title="Settings function">
+    Provide a function decorated with `@cocoindex.settings` that returns a `cocoindex.Settings` dataclass object. The function can have any name.
+
+    ```python
+    @cocoindex.settings
+    def cocoindex_settings() -> cocoindex.Settings:
+        return cocoindex.Settings(
+            database=cocoindex.DatabaseConnectionSpec(
+                url="postgres://cocoindex:cocoindex@localhost/cocoindex"
+            )
+        )
+    ```
+
+    This function is called once when CocoIndex is initialized. When provided, environment variables are ignored.
+  </Step>
+  <Step title="cocoindex.init()">
+    Call `cocoindex.init()` with a `cocoindex.Settings` dataclass object. Once called, the `@cocoindex.settings` function and environment variables are ignored.
+
+    ```python
+    cocoindex.init(
+        cocoindex.Settings(
+            database=cocoindex.DatabaseConnectionSpec(
+                url="postgres://cocoindex:cocoindex@localhost/cocoindex"
+            )
+        )
+    )
+    ```
+
+    <Info>
+      `cocoindex.init()` is optional. CocoIndex is automatically initialized when needed (e.g. when any method of any flow is called the first time). Calling it explicitly at startup has the benefit of surfacing any configuration errors earlier. You can call it without arguments (`cocoindex.init()`) to trigger initialization without providing settings.
+    </Info>
+
+    <Warning>
+      If you call `cocoindex.init()` only inside `if __name__ == "__main__":`, it won't execute when using the CocoIndex CLI, as the CLI won't run your main logic.
+    </Warning>
+  </Step>
+</Steps>
+
+## List of settings
+
+`cocoindex.Settings` is a dataclass with the following fields:
+
+<ParamField path="app_namespace" type="str">
+  The namespace of the application. See [App namespace](#app-namespace).
+
+  *Environment variable*: `COCOINDEX_APP_NAMESPACE`
+</ParamField>
+
+<ParamField path="db_schema_name" type="str">
+  The database schema name to use for storing CocoIndex internal metadata and tracking tables.
+
+  *Environment variable*: `COCOINDEX_DATABASE_SCHEMA_NAME`
+</ParamField>
+
+<ParamField path="database" type="DatabaseConnectionSpec" required>
+  The connection to the Postgres database. See [DatabaseConnectionSpec](#databaseconnectionspec).
+</ParamField>
+
+<ParamField path="global_execution_options" type="GlobalExecutionOptions">
+  The global execution options shared by all flows. See [GlobalExecutionOptions](#globalexecutionoptions).
+</ParamField>
+
+### App namespace
+
+The `app_namespace` field helps organize flows across different environments (e.g., dev, staging, production) or team members. When set, it prefixes flow names with the namespace.
+
+For example, if the namespace is `Staging` and a flow is named `Flow1`, the full name of the flow will be `Staging.Flow1`.
+
+You can get the current app namespace by calling `cocoindex.get_app_namespace()`. See [Getting app namespace](/core/flow-definition#getting-the-app-namespace) for more details.
+
+If not set, all flows are in a default unnamed namespace.
+
+### Database schema name
+
+The `db_schema_name` field specifies the Postgres schema where CocoIndex internal tables (metadata and tracking tables) will be stored. If not set, CocoIndex uses the default schema of the database connection (usually `public`).
+
+<Note>
+  The schema is automatically created if it doesn't already exist.
+</Note>
+
+## DatabaseConnectionSpec
+
+`DatabaseConnectionSpec` configures the connection to a database. Only Postgres is currently supported.
+
+<ParamField path="url" type="str" required>
+  The URL of the Postgres database to use as internal storage.
+
+  Example: `postgres://cocoindex:cocoindex@localhost/cocoindex`
+
+  *Environment variable*: `COCOINDEX_DATABASE_URL`
+</ParamField>
+
+<ParamField path="user" type="str">
+  The username for the Postgres database. If not provided, the username comes from `url`.
+
+  *Environment variable*: `COCOINDEX_DATABASE_USER`
+</ParamField>
+
+<ParamField path="password" type="str">
+  The password for the Postgres database. If not provided, the password comes from `url`.
+
+  *Environment variable*: `COCOINDEX_DATABASE_PASSWORD`
+
+  <Tip>
+    All values in `url` must be URL-encoded if they contain special characters. For this reason, prefer using the separate `user` and `password` fields for credentials.
+  </Tip>
+</ParamField>
+
+<ParamField path="max_connections" type="int" default="25">
+  The maximum number of connections to keep in the pool.
+
+  *Environment variable*: `COCOINDEX_DATABASE_MAX_CONNECTIONS`
+</ParamField>
+
+<ParamField path="min_connections" type="int" default="5">
+  The minimum number of connections to keep in the pool.
+
+  *Environment variable*: `COCOINDEX_DATABASE_MIN_CONNECTIONS`
+</ParamField>
+
+<Info>
+  If you use the Postgres database hosted by [Supabase](https://supabase.com/), click **Connect** on your project dashboard and find the following URL:
+
+  - If you're on an IPv6 network, use the URL under **Direct connection**. You can visit [IPv6 test](https://test-ipv6.com/) to check.
+  - Otherwise, use the URL under **Session pooler**. Note that Supabase has a pool size limit of 15 by default, while CocoIndex's default `max_connections` is 25. Adjust either value so that Supabase's pool size limit is greater than `max_connections`. Supabase's pool size limit can be adjusted under "Database" → "Settings".
+  - CocoIndex does not support *Transaction pooler*.
+</Info>
+
+## GlobalExecutionOptions
+
+`GlobalExecutionOptions` configures global execution options shared by all flows.
+
+<ParamField path="source_max_inflight_rows" type="int" default="1024">
+  The maximum number of concurrent inflight rows across all source operations.
+
+  *Environment variable*: `COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS`
+</ParamField>
+
+<ParamField path="source_max_inflight_bytes" type="int">
+  The maximum number of concurrent inflight bytes across all source operations.
+
+  *Environment variable*: `COCOINDEX_SOURCE_MAX_INFLIGHT_BYTES`
+</ParamField>
+
+See [Concurrency controls](/core/flow-definition#concurrency-controls) for details on why it is necessary to control processing concurrency, and how to configure limits on a per-source basis. When both global and per-source limits are specified, both must be satisfied to admit additional source rows.
+
+## List of environment variables
+
+| Environment variable | Corresponding field in `Settings` | Required |
+|---|---|---|
+| `COCOINDEX_APP_NAMESPACE` | `app_namespace` | No |
+| `COCOINDEX_DATABASE_SCHEMA_NAME` | `db_schema_name` | No |
+| `COCOINDEX_DATABASE_URL` | `database.url` | **Yes** |
+| `COCOINDEX_DATABASE_USER` | `database.user` | No |
+| `COCOINDEX_DATABASE_PASSWORD` | `database.password` | No |
+| `COCOINDEX_DATABASE_MAX_CONNECTIONS` | `database.max_connections` | No (default: `25`) |
+| `COCOINDEX_DATABASE_MIN_CONNECTIONS` | `database.min_connections` | No (default: `5`) |
+| `COCOINDEX_SOURCE_MAX_INFLIGHT_ROWS` | `global_execution_options.source_max_inflight_rows` | No (default: `1024`) |
+| `COCOINDEX_SOURCE_MAX_INFLIGHT_BYTES` | `global_execution_options.source_max_inflight_bytes` | No |

@@ -1,0 +1,114 @@
+---
+title: "Basics"
+description: "Core concepts for CocoIndex: indexing flows, data, operations, incremental processing, and the lifecycle of a flow."
+---
+
+## What is an index?
+
+An **index** is a collection of data stored in a way that is easy for retrieval.
+
+CocoIndex is an ETL framework for building indexes from specified data sources — a process known as **indexing**. It also offers utilities for users to retrieve data from the indexes.
+
+An **indexing flow** extracts data from specified data sources, applies specified transformations, and puts the transformed data into a specified target for later retrieval.
+
+## Indexing flow elements
+
+An indexing flow has two aspects: data and operations on data.
+
+### Data
+
+An indexing flow involves source data and transformed data (either as an intermediate result or the final result to be put into targets). All data within the indexing flow has a **schema** determined at flow definition time.
+
+Each piece of data has a **data type**, falling into one of the following categories:
+
+<CardGroup cols={3}>
+  <Card title="Basic type" icon="atom">
+    Primitive values like strings, numbers, vectors, and other scalar types.
+  </Card>
+  <Card title="Struct type" icon="layer-group">
+    A collection of **fields**, each with a name and a type.
+  </Card>
+  <Card title="Table type" icon="table">
+    A collection of **rows**, each of which is a struct with a specified schema.
+  </Card>
+</CardGroup>
+
+A table type can be a **KTable** (with key columns that uniquely identify each row) or an **LTable** (rows are ordered but without keys).
+
+An indexing flow always has a top-level struct containing all data within and managed by the flow.
+
+See [Data Types](/core/data-types) for more details.
+
+### Operations
+
+An **operation** in an indexing flow defines a step in the flow. An operation is defined by:
+
+- **Action** — defines the behavior of the operation: _import_, _transform_, _for each_, _collect_, and _export_. See [Flow Definition](/core/flow-definition) for details on each action.
+
+- **Operation Spec** — required for `import`, `transform`, and `export` actions. Describes the specific behavior, for example a source to import from, a function describing the transformation behavior, or a target to export to.
+  - Each operation spec has an **operation type**, e.g. `LocalFile` (data source), `SplitRecursively` (function), `SentenceTransformerEmbed` (function), `Postgres` (target).
+  - CocoIndex maintains a set of supported operation types. Users can also implement their own.
+
+`import` and `transform` operations produce output data whose type is determined based on the operation spec and the types of input data.
+
+## An indexing flow example
+
+For the example shown in the [Quickstart](/getting-started/quickstart) section, the flow works as follows:
+
+- The `LocalFile` source creates a `documents` field at the top level, with `filename` (key) and `content` sub-fields.
+- A _for each_ action works on each document, with the following transformations:
+  - The `SplitRecursively` function splits content into chunks, adding a `chunks` field into the current scope (each document), with `location` (key) and `text` sub-fields.
+  - A _collect_ action works on each chunk, with the following transformations:
+    - The `SentenceTransformerEmbed` function embeds the chunk into a vector space, adding an `embedding` field into the current scope (each chunk).
+
+## Life cycle of an indexing flow
+
+An indexing flow, once set up, maintains a long-lived relationship between data source and target. This means:
+
+<Steps>
+  <Step title="Target stays available">
+    The target created by the flow remains available for querying at any time.
+  </Step>
+  <Step title="Target stays fresh">
+    As source data changes (new data added, existing data updated or deleted), data in the target is updated to reflect those changes according to the **update mode**:
+
+    - **One-time update**: Once triggered, CocoIndex updates the target data to reflect the version of the source data up to the current moment.
+    - **Live update**: CocoIndex continuously reacts to changes of source data and updates the target data accordingly, based on various **change capture mechanisms** for the source.
+
+    See [Flow Operations](/core/flow-operations) for more details.
+  </Step>
+  <Step title="Incremental processing">
+    CocoIndex intelligently reprocesses to propagate source changes to the target by:
+
+    - Determining which parts of the target data need to be recomputed
+    - Reusing existing computations where possible
+    - Only reprocessing the minimum necessary data
+
+    This is known as **incremental processing**.
+  </Step>
+</Steps>
+
+### The spreadsheet analogy
+
+You can think of an indexing flow similar to formulas in a spreadsheet:
+
+- In a spreadsheet, you define formulas that transform input cells into output cells.
+- When input values change, the spreadsheet recalculates affected outputs.
+- You focus on defining the transformation logic, not managing updates.
+
+CocoIndex works the same way, but with more powerful capabilities:
+
+- Instead of flat tables, CocoIndex models data in nested data structures, making it more natural to model complex data.
+- Instead of simple cell-level formulas, you have operations like _for each_ to apply the same formula across rows without repeating yourself.
+
+This means when writing your flow operations, you can treat source data as if it were static — focusing purely on defining the transformation logic. CocoIndex takes care of maintaining the dynamic relationship between sources and target data behind the scenes.
+
+## Internal storage
+
+As an indexing flow is long-lived, it needs to store intermediate data to keep track of states. CocoIndex uses internal storage for this purpose.
+
+<Warning>
+  CocoIndex currently requires a **Postgres database** as its internal storage. See [Settings](/core/settings#databaseconnectionspec) for configuring its connection.
+</Warning>
+
+The internal storage is managed by CocoIndex. See [Setup / drop flow](/core/flow-operations#setupdrop-flow) for more details on how CocoIndex manages the persistent state.

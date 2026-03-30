@@ -1,0 +1,139 @@
+---
+title: "Pinecone"
+description: "Export data to a Pinecone index with metadata filtering support."
+---
+
+The `Pinecone` target exports data to a [Pinecone](https://www.pinecone.io/) index. Each export target maps to a unique Pinecone index.
+
+| CocoIndex element | Pinecone element |
+|---|---|
+| An export target | A unique index |
+| A collected row | A vector |
+| The primary key field | The vector `id` |
+| The vector field | Vector values |
+| Other fields | Metadata fields |
+
+<Info>
+  Pinecone is provided as an optional dependency. Install it before use:
+
+  ```sh
+  pip install "cocoindex[pinecone]"
+  ```
+
+  Then import the spec and connection classes:
+
+  ```python
+  from cocoindex.targets._engine_builtin_specs import Pinecone, PineconeConnection
+  from cocoindex.targets.pinecone import get_index
+  ```
+</Info>
+
+## Spec
+
+`Pinecone`
+
+<ParamField path="index_name" type="string" required>
+  Name of the Pinecone index to export data to.
+</ParamField>
+
+<ParamField path="connection" type="AuthEntryReference[PineconeConnection]" required>
+  Auth reference to the Pinecone connection. `PineconeConnection` has the following fields:
+
+  - `api_key` (`str`): Your Pinecone API key.
+  - `environment` (`str`, optional): The Pinecone environment. If not specified, it is inferred from the API key.
+</ParamField>
+
+<ParamField path="namespace" type="string" default="">
+  Namespace within the index to use.
+</ParamField>
+
+<ParamField path="cloud" type="string" default="aws">
+  Cloud provider for the index. Options: `"aws"`, `"gcp"`, `"azure"`.
+</ParamField>
+
+<ParamField path="region" type="string" default="us-east-1">
+  Region for the index.
+</ParamField>
+
+<ParamField path="batch_size" type="integer" default="100">
+  Number of vectors to upsert or delete per batch operation.
+</ParamField>
+
+## Notes
+
+- Exactly **one primary key field** is required. It maps to the Pinecone vector `id`.
+- Exactly **one vector embedding field** is required. It must be a list of floats with a fixed dimension.
+- All other fields are stored as metadata and support Pinecone's metadata filtering syntax during queries.
+- If the index does not exist, CocoIndex creates it automatically using the dimension from your vector embeddings.
+
+## Example
+
+```python
+import cocoindex
+from cocoindex.targets._engine_builtin_specs import Pinecone, PineconeConnection
+from cocoindex.auth_registry import AuthEntryReference
+
+@cocoindex.flow_def(name="DocumentSearchFlow")
+def document_search_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    # ... source and transformations ...
+
+    doc_collector = data_scope.add_collector()
+    # ... collect fields: id, filename, text, embedding ...
+
+    pinecone_conn = cocoindex.add_auth_entry(
+        "pinecone",
+        PineconeConnection(
+            api_key="your-api-key",
+        ),
+    )
+
+    doc_collector.export(
+        "documents",
+        Pinecone(
+            index_name="documents",
+            connection=pinecone_conn,
+            namespace="production",
+            cloud="aws",
+            region="us-east-1",
+        ),
+        primary_key_fields=["id"],
+        vector_indexes=[
+            cocoindex.VectorIndexDef(
+                field_name="embedding",
+                metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+            )
+        ],
+    )
+```
+
+## `get_index()` helper
+
+CocoIndex provides a helper to get a Pinecone index reference for querying:
+
+```python
+from cocoindex.targets.pinecone import get_index
+
+index = get_index(
+    api_key="your-api-key",
+    index_name="documents",
+)
+
+results = index.query(
+    vector=[0.1, 0.2, 0.3],
+    top_k=10,
+    namespace="production",
+)
+```
+
+Signature:
+
+```python
+def get_index(
+    api_key: str,
+    index_name: str,
+) -> pinecone.Index
+```
+
+<Tip>
+  See the [Text Embedding Pinecone Example](https://github.com/cocoindex-io/cocoindex/tree/main/examples/text_embedding_pinecone) for a complete end-to-end flow.
+</Tip>

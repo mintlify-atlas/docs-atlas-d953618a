@@ -1,0 +1,126 @@
+---
+title: "LanceDB"
+description: "Export data to a LanceDB table with vector and full-text search support."
+---
+
+The `coco_lancedb.LanceDB` target exports data to a [LanceDB](https://lancedb.github.io/lancedb/) table. Each export target maps to a unique table.
+
+| CocoIndex element | LanceDB element |
+|---|---|
+| An export target | A unique table |
+| A collected row | A row |
+| A field | A column |
+
+<Info>
+  LanceDB is provided as an optional dependency. Install it before use:
+
+  ```sh
+  pip install "cocoindex[lancedb]"
+  ```
+
+  Then import the submodule in your flow:
+
+  ```python
+  import cocoindex.targets.lancedb as coco_lancedb
+  ```
+</Info>
+
+## Spec
+
+`coco_lancedb.LanceDB`
+
+<ParamField path="db_uri" type="string" required>
+  Path or URI to the LanceDB database, e.g. `./lancedb_data`.
+</ParamField>
+
+<ParamField path="table_name" type="string" required>
+  Name of the table to export data to.
+</ParamField>
+
+<ParamField path="db_options" type="DatabaseOptions">
+  Advanced database options. `DatabaseOptions` has the following field:
+
+  - `storage_options` (`dict[str, Any]`, optional): Passed through to LanceDB when connecting.
+</ParamField>
+
+<ParamField path="num_transactions_before_optimize" type="integer" default="50">
+  Number of write transactions before CocoIndex calls `optimize()` on the table. Optimization compacts table fragments for better query performance.
+</ParamField>
+
+## Notes
+
+- Exactly **one primary key field** is required. CocoIndex creates a B-Tree index on the primary key column.
+- **FTS indexes** are supported via the `fts_indexes` parameter on `collector.export()`. FTS functionality requires [LanceDB Enterprise](https://lancedb.com/docs/indexing/fts-index/). You can pass any parameters accepted by LanceDB's FTS index creation API (e.g., `tokenizer_name`).
+
+<Warning>
+  LanceDB cannot build a vector index on an empty table. If you want vector indexes, run the flow once to populate the table with data first, then define the vector indexes.
+
+  See [LanceDB issue #4034](https://github.com/lance-format/lance/issues/4034) for more context.
+</Warning>
+
+## Example
+
+Export documents with vector and full-text search indexes:
+
+```python
+import cocoindex
+import cocoindex.targets.lancedb as coco_lancedb
+
+@cocoindex.flow_def(name="DocumentSearchFlow")
+def document_search_flow(flow_builder: cocoindex.FlowBuilder, data_scope: cocoindex.DataScope):
+    # ... source and transformations ...
+
+    doc_collector = data_scope.add_collector()
+    # ... collect fields: id, content, description, title, embedding ...
+
+    doc_collector.export(
+        "documents",
+        coco_lancedb.LanceDB(
+            db_uri="./lancedb_data",
+            table_name="documents",
+        ),
+        primary_key_fields=["id"],
+        vector_indexes=[
+            cocoindex.VectorIndexDef(
+                field_name="embedding",
+                metric=cocoindex.VectorSimilarityMetric.COSINE_SIMILARITY,
+            )
+        ],
+        fts_indexes=[
+            # Basic FTS index with default tokenizer
+            cocoindex.FtsIndexDef("content"),
+            # FTS index with stemming for better recall
+            cocoindex.FtsIndexDef("description", parameters={"tokenizer_name": "en_stem"}),
+            # FTS index with position tracking for phrase search
+            cocoindex.FtsIndexDef("title", parameters={"tokenizer_name": "default", "with_position": True}),
+        ],
+    )
+```
+
+## `connect_async()` helper
+
+CocoIndex provides a helper to get a shared `AsyncConnection` that is reused across your process. Because it shares the same connection instance as CocoIndex's writer, it provides strong read-after-write consistency when indexing and querying in the same process.
+
+```python
+from cocoindex.targets import lancedb as coco_lancedb
+
+db = await coco_lancedb.connect_async("./lancedb_data")
+table = await db.open_table("documents")
+```
+
+Signature:
+
+```python
+def connect_async(
+    db_uri: str,
+    *,
+    db_options: coco_lancedb.DatabaseOptions | None = None,
+    read_consistency_interval: datetime.timedelta | None = None,
+) -> lancedb.AsyncConnection
+```
+
+Once a connection for a given `db_uri` exists, subsequent calls return the same instance without reconnecting.
+
+<Tip>
+  See the [Text Embedding LanceDB Example](https://github.com/cocoindex-io/cocoindex/tree/main/examples/text_embedding_lancedb) for a complete end-to-end flow.
+</Tip>
